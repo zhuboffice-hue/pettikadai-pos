@@ -57,13 +57,13 @@ export default function DashboardLayout({
     }
 
     const navLinks = [
-        { name: 'POS', href: '/dashboard', icon: LayoutDashboard, roles: ['shop-admin', 'shop-user', 'superadmin'] },
-        { name: 'Orders', href: '/orders', icon: ShoppingCart, roles: ['shop-admin', 'superadmin'] },
-        { name: 'Kadan', href: '/khata', icon: CreditCard, roles: ['shop-admin', 'superadmin'] },
-        { name: 'Inventory', href: '/inventory', icon: Package, roles: ['shop-admin', 'superadmin'] },
-        { name: 'Customers', href: '/customers', icon: Users, roles: ['shop-admin', 'shop-user', 'superadmin'] },
-        { name: 'Shop Admin', href: '/finance', icon: LayoutTemplate, roles: ['shop-admin', 'superadmin'] },
-        { name: 'Settings', href: '/settings', icon: Settings, roles: ['shop-admin', 'superadmin'] },
+        { name: 'POS', href: '/dashboard', icon: LayoutDashboard, roles: ['shop-admin', 'shop-user', 'superadmin', 'user'] },
+        { name: 'Orders', href: '/orders', icon: ShoppingCart, roles: ['shop-admin', 'superadmin', 'user'] },
+        { name: 'Kadan', href: '/khata', icon: CreditCard, roles: ['shop-admin', 'superadmin', 'user'] },
+        { name: 'Inventory', href: '/inventory', icon: Package, roles: ['shop-admin', 'superadmin', 'user'] },
+        { name: 'Customers', href: '/customers', icon: Users, roles: ['shop-admin', 'shop-user', 'superadmin', 'user'] },
+        { name: 'Shop Admin', href: '/finance', icon: LayoutTemplate, roles: ['shop-admin', 'superadmin', 'user'] },
+        { name: 'Settings', href: '/settings', icon: Settings, roles: ['shop-admin', 'superadmin', 'user'] },
     ];
 
     const currentRole = userData?.role || 'user';
