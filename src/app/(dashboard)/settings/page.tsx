@@ -11,9 +11,11 @@ import {
 import { useLiveQuery } from "dexie-react-hooks";
 import { db, StoreSettings } from "@/lib/db/db";
 import { v4 as uuidv4 } from 'uuid';
+import { useSync } from "@/hooks/useSync";
 
 export default function SettingsPage() {
-    const { userData } = useAuth();
+    const { userData, user } = useAuth();
+    const { manualSyncDown, isSyncing } = useSync();
     const isShopAdmin = userData?.role === 'shop-admin' || userData?.role === 'superadmin';
 
     // Default Settings
@@ -70,8 +72,8 @@ export default function SettingsPage() {
 
             await db.storeSettings.put(dataToSave);
             await db.syncQueue.add({
-                collection: 'store_settings',
-                docId: dataToSave.id,
+                collection: 'storeSettings', // Fixed collection name
+                docId: userData.shopId,      // Fixed: Use shopId as Doc ID to prevent collision
                 action: 'update',
                 data: dataToSave,
                 timestamp: Date.now(),
@@ -138,7 +140,7 @@ export default function SettingsPage() {
         }
     };
 
-    if (!isShopAdmin) return <div className="p-10 text-center text-error">Access Restricted</div>;
+
 
     return (
         <div className="container mx-auto max-w-7xl p-6 pb-24">
@@ -344,9 +346,14 @@ export default function SettingsPage() {
                             </div>
 
                             <div className="mt-6">
-                                <button className={`btn btn-success w-full text-white font-bold gap-2 ${loading ? 'loading' : ''}`} onClick={handleSave}>
-                                    <Save className="w-5 h-5" /> Save Store Information
-                                </button>
+                                {isShopAdmin && (
+                                    <button className={`btn btn-success w-full text-white font-bold gap-2 ${loading ? 'loading' : ''}`} onClick={handleSave}>
+                                        <Save className="w-5 h-5" /> Save Store Information
+                                    </button>
+                                )}
+                                {!isShopAdmin && (
+                                    <p className="text-center text-sm opacity-50 italic">Only Admins can modify store settings</p>
+                                )}
                             </div>
                         </div>
                     </div>
@@ -379,38 +386,60 @@ export default function SettingsPage() {
                                 <div className="badge badge-outline">Status: Idle</div>
                                 <div className="text-xs opacity-50">Cache: v{db.verno}</div>
                             </div>
-                            <div className="card-actions justify-end mt-4">
-                                <button className="btn btn-outline btn-primary btn-sm" onClick={() => window.location.reload()}>
-                                    Check & Reload
+                            <div className="card-actions justify-end mt-4 gap-2">
+                                <button className="btn btn-outline btn-primary btn-sm" onClick={() => manualSyncDown(userData?.shopId || '')} disabled={isSyncing}>
+                                    {isSyncing ? <span className="loading loading-spinner loading-xs"></span> : <RefreshCw className="w-4 h-4" />} Download Shop Data
+                                </button>
+                                <button className="btn btn-ghost btn-sm" onClick={() => window.location.reload()}>
+                                    Reload App
                                 </button>
                             </div>
                         </div>
                     </div>
 
-                    {/* Danger Zone */}
-                    <div className="card bg-red-50 shadow border border-red-200 text-red-900">
-                        <div className="card-body">
-                            <h3 className="card-title flex items-center gap-2 text-error">
-                                <AlertTriangle className="w-5 h-5" /> Danger Zone
-                            </h3>
-                            <p className="text-sm">Permanently delete ALL business data (products, bills, customers, etc). This cannot be undone.</p>
+                    {/* Danger Zone - Admin Only */}
+                    {isShopAdmin && (
+                        <div className="card bg-red-50 shadow border border-red-200 text-red-900">
+                            <div className="card-body">
+                                <h3 className="card-title flex items-center gap-2 text-error">
+                                    <AlertTriangle className="w-5 h-5" /> Danger Zone
+                                </h3>
+                                <p className="text-sm">Permanently delete ALL business data (products, bills, customers, etc). This cannot be undone.</p>
 
-                            <div className="flex gap-4 items-end mt-4">
-                                <div className="form-control w-full">
-                                    <input
-                                        type="text"
-                                        placeholder="Type: DELETE ALL"
-                                        className="input input-bordered w-full bg-white text-black"
-                                        value={deleteConfirmation}
-                                        onChange={e => setDeleteConfirmation(e.target.value)}
-                                    />
+                                <div className="flex gap-4 items-end mt-4">
+                                    <div className="form-control w-full">
+                                        <input
+                                            type="text"
+                                            placeholder="Type: DELETE ALL"
+                                            className="input input-bordered w-full bg-white text-black"
+                                            value={deleteConfirmation}
+                                            onChange={e => setDeleteConfirmation(e.target.value)}
+                                        />
+                                    </div>
+                                    <button className="btn btn-error text-white" onClick={handleDeleteAllData}>
+                                        <Trash2 className="w-4 h-4" /> Delete All Data
+                                    </button>
                                 </div>
-                                <button className="btn btn-error text-white" onClick={handleDeleteAllData}>
-                                    <Trash2 className="w-4 h-4" /> Delete All Data
-                                </button>
+                            </div>
+                        </div>
+                    )}
+                    {/* Debug Info */}
+                    <div className="card bg-base-100 shadow border border-base-200 mt-8 opacity-50 hover:opacity-100 transition-opacity">
+                        <div className="card-body">
+                            <h3 className="card-title text-sm uppercase font-mono text-gray-400">Debug Information</h3>
+                            <div className="text-xs font-mono space-y-1">
+                                <p><strong>User ID:</strong> {user?.uid}</p>
+                                <p><strong>User Email:</strong> {userData?.email}</p>
+                                <p><strong>Shop ID (Auth):</strong> {userData?.shopId}</p>
+                                <p><strong>Role:</strong> {userData?.role}</p>
+                                <p><strong>Local DB Version:</strong> v{db.verno}</p>
+                                <p><strong>Sync Status:</strong> {isSyncing ? 'Syncing...' : 'Idle'}</p>
+                                <div className="divider my-1"></div>
+                                <p className="text-gray-500">If data is incorrect, click "Download Shop Data" above.</p>
                             </div>
                         </div>
                     </div>
+
                 </div>
             </div>
         </div>

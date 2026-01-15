@@ -25,6 +25,8 @@ export default function DashboardPage() {
     const [customerPhone, setCustomerPhone] = useState("");
     const [customerName, setCustomerName] = useState("");
     const searchInputRef = useRef<HTMLInputElement>(null);
+    const [lastBill, setLastBill] = useState<Bill | null>(null);
+    const receiptRef = useRef<HTMLDivElement>(null);
 
     // Fetch Products & Inventory
     const products = useLiveQuery(async () => {
@@ -53,9 +55,24 @@ export default function DashboardPage() {
         return await db.storeSettings.where('shopId').equals(shopId).first();
     }, [shopId]);
 
+    // Loose Item State
+    const [looseProduct, setLooseProduct] = useState<Product | null>(null);
+    const [weightInput, setWeightInput] = useState("");
+
+    // ... (rest of implementation)
+
     const addToCart = (product: Product) => {
         // Stock Check
         const currentStock = inventoryMap ? (inventoryMap[product.id] || 0) : 0;
+
+        // Handle Loose Items
+        if (product.isLoose) {
+            setLooseProduct(product);
+            setWeightInput("");
+            // Trigger modal
+            return;
+        }
+
         const existingItem = cart.find(item => item.productId === product.id);
         const currentQtyInCart = existingItem ? existingItem.qty : 0;
 
@@ -84,18 +101,78 @@ export default function DashboardPage() {
         toast.success(`Add: ${product.name}`, { duration: 1000, position: 'bottom-center' });
     };
 
+    const confirmLooseItem = (e: React.FormEvent) => {
+        e.preventDefault();
+        if (!looseProduct || !weightInput) return;
+
+        const weight = parseFloat(weightInput);
+        if (isNaN(weight) || weight <= 0) {
+            toast.error("Invalid weight");
+            return;
+        }
+
+        // Stock Check
+        const currentStock = inventoryMap ? (inventoryMap[looseProduct.id] || 0) : 0;
+        // Check if item exists to see how much we already have
+        const existingItem = cart.find(item => item.productId === looseProduct.id);
+        const currentQtyInCart = existingItem ? existingItem.qty : 0;
+
+        if (currentStock - (currentQtyInCart + weight) < 0) {
+            toast.error(`Insufficient Stock! Available: ${currentStock} ${looseProduct.unit}`);
+            return;
+        }
+
+        setCart(prev => {
+            const existing = prev.find(item => item.productId === looseProduct.id);
+            if (existing) {
+                // Update existing weight
+                const newQty = existing.qty + weight;
+                return prev.map(item =>
+                    item.productId === looseProduct.id
+                        ? { ...item, qty: newQty, total: newQty * item.price }
+                        : item
+                );
+            }
+            // Add new
+            return [...prev, {
+                productId: looseProduct.id,
+                name: looseProduct.name,
+                price: looseProduct.price,
+                qty: weight,
+                total: weight * looseProduct.price,
+                isLoose: true // Add this flag to BillItem type if possible, or infer
+            }]
+        });
+
+        toast.success(`Added ${weight}${looseProduct.unit} of ${looseProduct.name}`);
+        setLooseProduct(null);
+        setWeightInput("");
+    };
+
     const updateQty = (productId: string, change: number) => {
         setCart(prev => prev.map(item => {
             if (item.productId === productId) {
-                const newQty = item.qty + change;
-                if (newQty < 1) return null; // Remove if < 1
+                // Determine increment step: 1 for normal, 0.1? or disable?
+                // For now, let's keep integer steps unless it's loose? 
+                // Creating a special check for loose items to disable simple +/- or make it smart
+                // But cart item doesn't store 'isLoose' property on 'BillItem' interface yet unless casted.
+                // We'll rely on checking product list or assuming.
 
-                // Stock Check on Increase
+                // Let's assume standard behavior for now to not break "non-loose".
+                // If the user wants to change weight, they should delete and re-add for now to keep it simple.
+                // Or we allow small increments (0.1) if it's float?
+
+                const isFloat = item.qty % 1 !== 0;
+                const step = isFloat ? (change > 0 ? 0.1 : -0.1) : change;
+
+                const newQty = parseFloat((item.qty + step).toFixed(3));
+                if (newQty <= 0) return null;
+
+                // Stock Check
                 if (change > 0) {
                     const currentStock = inventoryMap ? (inventoryMap[productId] || 0) : 0;
                     if (currentStock - newQty < 0) {
-                        toast.error(`Cannot add more! Stock limit reached.`);
-                        // Return item as is, effectively cancelling the increment
+                        toast.error(`Stock limit reached.`);
                         return item;
                     }
                 }
@@ -105,6 +182,10 @@ export default function DashboardPage() {
             return item;
         }).filter(Boolean) as BillItem[]);
     };
+
+    // ... (rest)
+
+
 
     const cartTotal = cart.reduce((sum, item) => sum + item.total, 0);
 
@@ -126,8 +207,7 @@ export default function DashboardPage() {
         }
     }
 
-    const [lastBill, setLastBill] = useState<Bill | null>(null);
-    const receiptRef = useRef<HTMLDivElement>(null);
+
 
     const handlePrint = () => {
         window.print();
@@ -155,9 +235,9 @@ export default function DashboardPage() {
             items: cart,
             totalAmount: payableAmount,
             paymentMode,
-            customerId: customerPhone ? customerPhone : undefined,
-            customerName: customerName || undefined,
-            customerPhone: customerPhone || undefined,
+            customerId: customerPhone || "WALK_IN",
+            customerName: customerName || null,
+            customerPhone: customerPhone || null,
             profit: totalProfit,
             createdAt: Date.now(),
             status: 'completed',
@@ -236,9 +316,11 @@ export default function DashboardPage() {
         setIsScanning(false);
     };
 
+
+
     return (
         <>
-            <div className="flex flex-col h-[calc(100vh-80px)] md:flex-row gap-6 print:hidden">
+            <div className="flex flex-col h-[calc(100vh-80px)] md:flex-row gap-6 no-print">
                 {/* Left Panel: Product Grid */}
                 <div className="flex-1 flex flex-col gap-4 min-w-0">
                     {/* Search & Scan Header */}
@@ -280,7 +362,10 @@ export default function DashboardPage() {
                     {/* Product Grid */}
                     <div className="flex-1 overflow-y-auto pr-2 pb-20 md:pb-0">
                         {!products ? (
-                            <div className="flex justify-center items-center h-64"><Loader2 className="w-8 h-8 animate-spin text-primary" /></div>
+                            <div className="min-h-[60vh] flex flex-col items-center justify-center text-base-content/50 gap-4">
+                                <Loader2 className="w-8 h-8 animate-spin text-primary" />
+                                <p>Loading POS...</p>
+                            </div>
                         ) : products.length === 0 ? (
                             <div className="flex flex-col items-center justify-center h-64 text-base-content/50">
                                 <PackageOpen className="w-16 h-16 mb-4 opacity-20" />
@@ -420,6 +505,51 @@ export default function DashboardPage() {
                     </div>
                 </div>
 
+                {/* Loose Item Modal */}
+                {looseProduct && (
+                    <div className="modal modal-open modal-bottom sm:modal-middle z-[99]">
+                        <div className="modal-box p-6">
+                            <h3 className="font-bold text-xl flex items-center gap-2">
+                                <PackageOpen className="w-6 h-6 text-primary" />
+                                Enter {looseProduct.isLoose ? "Weight" : "Quantity"}
+                            </h3>
+                            <p className="py-2 text-sm opacity-70">
+                                for <b>{looseProduct.name}</b> <span className="badge badge-sm">{looseProduct.unit}</span>
+                            </p>
+
+                            <form onSubmit={confirmLooseItem} className="mt-4">
+                                <div className="form-control w-full relative">
+                                    <label className="label uppercase text-xs font-bold opacity-50 pb-1">
+                                        Quantity ({looseProduct.unit})
+                                    </label>
+                                    <input
+                                        autoFocus
+                                        type="number"
+                                        step="0.001"
+                                        min="0.001"
+                                        placeholder="0.000"
+                                        className="input input-lg input-bordered w-full font-mono text-3xl font-bold pl-4"
+                                        value={weightInput}
+                                        onChange={e => setWeightInput(e.target.value)}
+                                    />
+                                    <div className="text-right mt-2 font-medium">
+                                        Total: <span className="text-primary font-bold text-xl">₹{((parseFloat(weightInput) || 0) * looseProduct.price).toFixed(2)}</span>
+                                        <span className="text-xs opacity-50 block">@ ₹{looseProduct.price}/{looseProduct.unit}</span>
+                                    </div>
+                                </div>
+
+                                <div className="modal-action gap-3 mt-8">
+                                    <button type="button" className="btn btn-ghost flex-1" onClick={() => setLooseProduct(null)}>Cancel</button>
+                                    <button type="submit" className="btn btn-primary flex-1 btn-lg">Add to Bill</button>
+                                </div>
+                            </form>
+                        </div>
+                        <form method="dialog" className="modal-backdrop bg-black/50">
+                            <button onClick={() => setLooseProduct(null)}>close</button>
+                        </form>
+                    </div>
+                )}
+
                 {/* Confirm Payment Modal */}
                 {showPaymentModal && (
                     <dialog className="modal modal-open">
@@ -512,13 +642,60 @@ export default function DashboardPage() {
                         </div>
                     </dialog>
                 )}
+                {/* Loose Item Modal (Restored) */}
+                {looseProduct && (
+                    <div className="modal modal-open modal-bottom sm:modal-middle backdrop-blur-sm">
+                        <div className="modal-box rounded-3xl p-6">
+                            <div className="flex justify-between items-start mb-6">
+                                <div>
+                                    <h3 className="font-bold text-2xl">{looseProduct.name}</h3>
+                                    <p className="text-base-content/60 text-sm">Enter quantity in <span className="font-bold text-base-content">{looseProduct.unit}</span></p>
+                                </div>
+                                <button className="btn btn-sm btn-circle btn-ghost bg-base-200" onClick={() => setLooseProduct(null)}>✕</button>
+                            </div>
+
+                            <form onSubmit={confirmLooseItem}>
+                                <div className="form-control w-full mb-8">
+                                    <div className="relative">
+                                        <input
+                                            autoFocus
+                                            type="number"
+                                            step="0.001"
+                                            min="0.001"
+                                            placeholder="0.00"
+                                            className="input input-lg w-full text-center text-5xl font-black h-24 bg-base-100 border-2 border-base-200 focus:border-primary focus:outline-none rounded-2xl no-spinner"
+                                            value={weightInput}
+                                            onChange={e => setWeightInput(e.target.value)}
+                                        />
+                                        <span className="absolute right-6 top-1/2 -translate-y-1/2 text-base-content/30 font-bold text-xl pointer-events-none">
+                                            {looseProduct.unit}
+                                        </span>
+                                    </div>
+                                    <div className="flex justify-between items-center mt-4 bg-base-50 p-4 rounded-xl">
+                                        <span className="text-sm opacity-60">Price: ₹{looseProduct.price}/{looseProduct.unit}</span>
+                                        <span className="text-xl font-bold text-primary">
+                                            Total: ₹{((parseFloat(weightInput) || 0) * looseProduct.price).toFixed(2)}
+                                        </span>
+                                    </div>
+                                </div>
+                                <div className="grid grid-cols-2 gap-4">
+                                    <button type="button" className="btn btn-outline btn-lg rounded-xl border-base-300" onClick={() => setLooseProduct(null)}>Cancel</button>
+                                    <button type="submit" className="btn btn-primary btn-lg rounded-xl text-primary-content">Add Item</button>
+                                </div>
+                            </form>
+                        </div>
+                        <form method="dialog" className="modal-backdrop bg-black/40">
+                            <button onClick={() => setLooseProduct(null)}>close</button>
+                        </form>
+                    </div>
+                )}
             </div>
 
             {/* Receipt Component (Hidden) */}
             {lastBill && (
                 <Receipt
                     ref={receiptRef}
-                    bill={lastBill}
+                    bill={lastBill as Bill}
                     settings={settings}
                 />
             )}

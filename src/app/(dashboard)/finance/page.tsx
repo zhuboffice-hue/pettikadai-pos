@@ -12,19 +12,28 @@ import {
 } from "lucide-react";
 import { toast } from "react-hot-toast";
 import { v4 as uuidv4 } from 'uuid';
+import { db as firestoreDb } from "@/lib/firebase/config";
+import { collection, query, where, getDocs, doc, setDoc, deleteDoc } from "firebase/firestore";
 
 export default function ShopAdminDashboard() {
     const { userData } = useAuth();
     const shopId = userData?.shopId;
 
     const [isExpenseModalOpen, setIsExpenseModalOpen] = useState(false);
+    const [isStaffModalOpen, setIsStaffModalOpen] = useState(false);
+
+    // Employee State
+    const [staffList, setStaffList] = useState<any[]>([]);
+    const [inviteForm, setInviteForm] = useState({ name: "", email: "", role: "shop-user" });
+    const [isLoadingStaff, setIsLoadingStaff] = useState(false);
+
     const [expenseForm, setExpenseForm] = useState({
         title: "",
         amount: "",
         category: "Rent"
     });
 
-    // 1. Fetch Basic Data
+    // 1. Fetch Basic Data (Dexie)
     const bills = useLiveQuery(async () => {
         if (!shopId) return [];
         return await db.bills.where('shopId').equals(shopId).toArray();
@@ -37,8 +46,7 @@ export default function ShopAdminDashboard() {
 
     const products = useLiveQuery(async () => {
         if (!shopId) return [];
-        const all = await db.products.where('shopId').equals(shopId).toArray();
-        return all;
+        return await db.products.where('shopId').equals(shopId).toArray();
     }, [shopId]);
 
     const expenses = useLiveQuery(async () => {
@@ -54,17 +62,13 @@ export default function ShopAdminDashboard() {
     // 2. Calculations
     const totalRevenue = bills?.reduce((acc, bill) => acc + bill.totalAmount, 0) || 0;
     const totalBills = bills?.length || 0;
-    const avgBillValue = totalBills > 0 ? totalRevenue / totalBills : 0;
 
     // Expenses
     const totalExpenses = expenses?.reduce((acc, exp) => acc + exp.amount, 0) || 0;
     const grossProfit = bills?.reduce((acc, bill) => acc + (bill.profit || 0), 0) || 0;
     const netProfit = grossProfit - totalExpenses;
 
-    // 3. Advanced Widgets Logic
-
-    // Low Stock Alert
-    // Map product names to inventory items
+    // 3. Logic
     const lowStockItems = inventory?.filter(inv => inv.currentStock < (inv.lowStockThreshold || 5))
         .map(inv => {
             const product = products?.find(p => p.id === inv.productId);
@@ -75,16 +79,12 @@ export default function ShopAdminDashboard() {
             };
         }) || [];
 
-    // Top Customers (Simple Calc on the fly)
-    // We can reuse the logic from Customers page, simplified here
     const topCustomers = (customers || []).map(c => {
-        // This is expensive if lots of bills, but okay for MVP local DB
         const customerBills = bills?.filter(b => b.customerPhone === c.phone) || [];
         const totalSpent = customerBills.reduce((acc, b) => acc + b.totalAmount, 0);
         return { ...c, totalSpent, count: customerBills.length };
-    }).sort((a, b) => b.totalSpent - a.totalSpent).slice(0, 3); // Top 3
+    }).sort((a, b) => b.totalSpent - a.totalSpent).slice(0, 3);
 
-    // Stock Value
     const stockValue = inventory?.reduce((acc, item) => {
         const product = products?.find(p => p.id === item.productId);
         const costPrice = product?.costPrice || 0;
@@ -92,7 +92,7 @@ export default function ShopAdminDashboard() {
     }, 0) || 0;
 
 
-    // Expense Handlers
+    // Handlers
     const handleAddExpense = async () => {
         if (!shopId || !expenseForm.title || !expenseForm.amount) return;
         try {
@@ -126,6 +126,67 @@ export default function ShopAdminDashboard() {
         } catch (e) { toast.error("Failed"); }
     };
 
+    // Staff Logic
+    const fetchStaff = async () => {
+        if (!shopId) return;
+        setIsLoadingStaff(true);
+        try {
+            const usersRef = collection(firestoreDb, "users");
+            const q = query(usersRef, where("shopId", "==", shopId));
+            const snapshot = await getDocs(q);
+            const users = snapshot.docs.map(d => ({ ...d.data(), id: d.id, type: 'user' }));
+
+            const invitesRef = collection(firestoreDb, "invites");
+            const qInvite = query(invitesRef, where("shopId", "==", shopId));
+            const snapshotInvite = await getDocs(qInvite);
+            const invites = snapshotInvite.docs.map(d => ({ ...d.data(), id: d.id, type: 'invite' }));
+
+            setStaffList([...users, ...invites]);
+        } catch (error) {
+            console.error(error);
+            toast.error("Failed to load staff");
+        } finally {
+            setIsLoadingStaff(false);
+        }
+    };
+
+    const handleInviteUser = async () => {
+        if (!inviteForm.email || !inviteForm.name) {
+            toast.error("Name and Email required");
+            return;
+        }
+        try {
+            const inviteRef = doc(firestoreDb, "invites", inviteForm.email);
+            await setDoc(inviteRef, {
+                email: inviteForm.email,
+                name: inviteForm.name,
+                role: inviteForm.role,
+                shopId: shopId,
+                createdAt: Date.now(),
+                status: 'pending'
+            });
+            toast.success("User Invited!");
+            setInviteForm({ name: "", email: "", role: "shop-user" });
+            fetchStaff();
+        } catch (error) {
+            console.error(error);
+            toast.error("Invite failed");
+        }
+    };
+
+    const handleRemoveAccess = async (item: any) => {
+        if (!confirm("Are you sure? This will remove access.")) return;
+        try {
+            if (item.type === 'invite') {
+                await deleteDoc(doc(firestoreDb, "invites", item.id));
+            } else {
+                await setDoc(doc(firestoreDb, "users", item.id), { ...item, shopId: null, role: 'user' }, { merge: true });
+            }
+            toast.success("Access Removed");
+            fetchStaff();
+        } catch (e) { toast.error("Failed"); }
+    };
+
     return (
         <div className="space-y-6 container mx-auto p-2">
             <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
@@ -135,14 +196,18 @@ export default function ShopAdminDashboard() {
                     </h1>
                     <p className="text-base-content/60">Overview, Alerts & Financial Health</p>
                 </div>
-                <div className="text-sm badge badge-ghost p-3 font-mono">
-                    {new Date().toLocaleDateString('en-IN', { weekday: 'short', month: 'short', day: 'numeric' })}
+                <div className="flex gap-2">
+                    <button className="btn btn-primary btn-outline gap-2" onClick={() => { setIsStaffModalOpen(true); fetchStaff(); }}>
+                        <Users className="w-4 h-4" /> Manage Staff
+                    </button>
+                    <div className="text-sm badge badge-ghost p-3 font-mono">
+                        {new Date().toLocaleDateString('en-IN', { weekday: 'short', month: 'short', day: 'numeric' })}
+                    </div>
                 </div>
             </div>
 
-            {/* TOP ROW: High Priority Metrics */}
+            {/* Metrics */}
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-                {/* Revenue */}
                 <div className="stats shadow-lg bg-gradient-to-br from-primary to-primary-focus text-primary-content">
                     <div className="stat">
                         <div className="stat-title text-primary-content/80">Total Revenue</div>
@@ -153,7 +218,6 @@ export default function ShopAdminDashboard() {
                     </div>
                 </div>
 
-                {/* Net Profit */}
                 <div className="stats shadow-lg border border-base-200">
                     <div className="stat">
                         <div className="stat-figure text-success">
@@ -167,7 +231,6 @@ export default function ShopAdminDashboard() {
                     </div>
                 </div>
 
-                {/* Stock Alerts (New Widget) */}
                 <div className={`stats shadow-lg border border-base-200 ${lowStockItems.length > 0 ? 'bg-error/5 border-error/20' : ''}`}>
                     <div className="stat">
                         <div className={`stat-figure ${lowStockItems.length > 0 ? 'text-error' : 'text-success'}`}>
@@ -181,7 +244,6 @@ export default function ShopAdminDashboard() {
                     </div>
                 </div>
 
-                {/* Regular Customers (New Widget) */}
                 <div className="stats shadow-lg border border-base-200">
                     <div className="stat">
                         <div className="stat-figure text-secondary">
@@ -195,10 +257,8 @@ export default function ShopAdminDashboard() {
             </div>
 
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-
-                {/* COLUMN 1 & 2: Main Content */}
                 <div className="lg:col-span-2 space-y-6">
-                    {/* Stock Alert Detailed List */}
+                    {/* Low Stock */}
                     {lowStockItems.length > 0 && (
                         <div className="card bg-base-100 shadow-xl border border-error/20">
                             <div className="card-body p-4">
@@ -229,7 +289,7 @@ export default function ShopAdminDashboard() {
                         </div>
                     )}
 
-                    {/* Expenses Management */}
+                    {/* Expenses */}
                     <div className="card bg-base-100 shadow-xl border border-base-200">
                         <div className="card-body p-0">
                             <div className="p-4 border-b border-base-200 flex justify-between items-center">
@@ -262,9 +322,8 @@ export default function ShopAdminDashboard() {
                     </div>
                 </div>
 
-                {/* COLUMN 3: Side Widgets */}
                 <div className="space-y-6">
-                    {/* Top Customers Widget */}
+                    {/* Top Customers */}
                     <div className="card bg-base-100 shadow-xl border border-base-200">
                         <div className="card-body p-4">
                             <h2 className="card-title text-base flex items-center gap-2 mb-4">
@@ -319,7 +378,6 @@ export default function ShopAdminDashboard() {
                     <div className="modal-box p-6 rounded-2xl">
                         <button className="btn btn-sm btn-circle btn-ghost absolute right-2 top-2" onClick={() => setIsExpenseModalOpen(false)}>✕</button>
                         <h3 className="font-bold text-xl mb-4">Add New Expense</h3>
-
                         <div className="space-y-4">
                             <div className="form-control">
                                 <label className="label font-medium opacity-70">Title</label>
@@ -331,7 +389,6 @@ export default function ShopAdminDashboard() {
                                     onChange={e => setExpenseForm({ ...expenseForm, title: e.target.value })}
                                 />
                             </div>
-
                             <div className="grid grid-cols-2 gap-4">
                                 <div className="form-control">
                                     <label className="label font-medium opacity-70">Amount (₹)</label>
@@ -358,10 +415,110 @@ export default function ShopAdminDashboard() {
                                 </div>
                             </div>
                         </div>
-
                         <div className="modal-action mt-8">
                             <button className="btn btn-ghost" onClick={() => setIsExpenseModalOpen(false)}>Cancel</button>
                             <button className="btn btn-primary px-8" onClick={handleAddExpense}>Save Expense</button>
+                        </div>
+                    </div>
+                </dialog>
+            )}
+
+            {/* Staff Modal */}
+            {isStaffModalOpen && (
+                <dialog className="modal modal-open">
+                    <div className="modal-box w-11/12 max-w-3xl rounded-2xl p-6">
+                        <button className="btn btn-sm btn-circle btn-ghost absolute right-2 top-2" onClick={() => setIsStaffModalOpen(false)}>✕</button>
+                        <h3 className="font-bold text-2xl mb-1 flex items-center gap-2">
+                            <Users className="w-6 h-6 text-primary" /> Staff Management
+                        </h3>
+                        <p className="text-base-content/60 text-sm mb-6">Manage access to your shop dashboard</p>
+
+                        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                            <div className="md:col-span-1 bg-base-50 p-4 rounded-xl h-fit">
+                                <h4 className="font-bold mb-4 text-sm uppercase opacity-50">Invite New User</h4>
+                                <div className="space-y-3">
+                                    <input
+                                        className="input input-bordered w-full input-sm"
+                                        placeholder="Name"
+                                        value={inviteForm.name}
+                                        onChange={e => setInviteForm({ ...inviteForm, name: e.target.value })}
+                                    />
+                                    <input
+                                        className="input input-bordered w-full input-sm"
+                                        placeholder="Email Address"
+                                        type="email"
+                                        value={inviteForm.email}
+                                        onChange={e => setInviteForm({ ...inviteForm, email: e.target.value })}
+                                    />
+                                    <select
+                                        className="select select-bordered w-full select-sm"
+                                        value={inviteForm.role}
+                                        onChange={e => setInviteForm({ ...inviteForm, role: e.target.value })}
+                                    >
+                                        <option value="shop-user">Shop Staff (POS Only)</option>
+                                        <option value="shop-admin">Manager (Full Access)</option>
+                                    </select>
+                                    <button
+                                        className="btn btn-primary w-full btn-sm"
+                                        onClick={handleInviteUser}
+                                    >
+                                        Send Invite
+                                    </button>
+                                </div>
+                            </div>
+
+                            <div className="md:col-span-2">
+                                <h4 className="font-bold mb-4 text-sm uppercase opacity-50">Current Staff & Invites</h4>
+                                {isLoadingStaff ? (
+                                    <div className="flex justify-center py-8"><span className="loading loading-spinner"></span></div>
+                                ) : (
+                                    <div className="overflow-x-auto border border-base-200 rounded-lg">
+                                        <table className="table table-sm">
+                                            <thead className="bg-base-100">
+                                                <tr>
+                                                    <th>Name/Email</th>
+                                                    <th>Role</th>
+                                                    <th>Status</th>
+                                                    <th>Action</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody>
+                                                {staffList.length === 0 ? (
+                                                    <tr><td colSpan={4} className="text-center opacity-50 py-4">No staff found</td></tr>
+                                                ) : (
+                                                    staffList.map((staff, idx) => (
+                                                        <tr key={idx} className="hover:bg-base-50">
+                                                            <td>
+                                                                <div className="font-bold text-xs">{staff.name}</div>
+                                                                <div className="text-[10px] opacity-50">{staff.email}</div>
+                                                            </td>
+                                                            <td>
+                                                                <span className="badge badge-xs badge-ghost">{staff.role}</span>
+                                                            </td>
+                                                            <td>
+                                                                {staff.type === 'invite' ? (
+                                                                    <span className="badge badge-xs badge-warning badge-outline">Pending</span>
+                                                                ) : (
+                                                                    <span className="badge badge-xs badge-success badge-outline">Active</span>
+                                                                )}
+                                                            </td>
+                                                            <td>
+                                                                <button
+                                                                    className="btn btn-xs btn-square btn-ghost text-error"
+                                                                    title="Remove Access"
+                                                                    onClick={() => handleRemoveAccess(staff)}
+                                                                >
+                                                                    <Trash2 className="w-3 h-3" />
+                                                                </button>
+                                                            </td>
+                                                        </tr>
+                                                    ))
+                                                )}
+                                            </tbody>
+                                        </table>
+                                    </div>
+                                )}
+                            </div>
                         </div>
                     </div>
                 </dialog>

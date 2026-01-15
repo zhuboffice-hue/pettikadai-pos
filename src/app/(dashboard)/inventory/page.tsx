@@ -3,10 +3,12 @@
 import { useState } from "react";
 import { useLiveQuery } from "dexie-react-hooks";
 import { db, Product } from "@/lib/db/db";
-import { Plus, Search, Edit, Trash2, Loader2 } from "lucide-react";
+import BarcodeScanner from "@/components/BarcodeScanner";
+import { Plus, Search, Edit, Trash2, Loader2, Package, Globe, ScanBarcode, X } from "lucide-react";
 import { toast } from "react-hot-toast";
 import { v4 as uuidv4 } from 'uuid';
 import { useAuth } from "@/components/providers/AuthProvider";
+import GlobalCatalog, { CatalogItem } from "@/components/inventory/GlobalCatalog";
 
 export default function InventoryPage() {
     const { userData } = useAuth();
@@ -17,10 +19,12 @@ export default function InventoryPage() {
         return await db.products.where('shopId').equals(shopId).toArray();
     }, [shopId]);
 
+    const [activeTab, setActiveTab] = useState<'inventory' | 'catalog'>('inventory');
     const [searchTerm, setSearchTerm] = useState("");
     const [isModalOpen, setIsModalOpen] = useState(false);
     const [editingProduct, setEditingProduct] = useState<Product | null>(null);
     const [loading, setLoading] = useState(false);
+    const [isScanning, setIsScanning] = useState(false);
 
     // Form State
     const [formData, setFormData] = useState({
@@ -33,6 +37,9 @@ export default function InventoryPage() {
         unit: "pcs",
         initialStock: ""
     });
+
+    // Helper to get set of existing names for Catalog check
+    const existingProductNames = new Set(products?.map(p => p.name.toLowerCase()) || []);
 
     const handleSave = async (e: React.FormEvent) => {
         e.preventDefault();
@@ -61,10 +68,6 @@ export default function InventoryPage() {
             // 1. Save to Local DB (Dexie)
             if (editingProduct) {
                 await db.products.put(productData);
-                // Also update unit in inventory if needed (though inventory doesn't store unit, UI uses product's unit)
-                // If stock was edited, we might need a separate 'Adjust Stock' feature, 
-                // but for now we only update product details here.
-
                 await db.inventory.where('productId').equals(editingProduct.id).modify({ lastUpdated: Date.now(), synced: false });
 
                 // Add to Sync Queue
@@ -101,6 +104,8 @@ export default function InventoryPage() {
                     shopId: shopId
                 });
                 toast.success("Product added!");
+                // Switch back to inventory tab if added from catalog
+                setActiveTab('inventory');
             }
             closeModal();
         } catch (error) {
@@ -135,7 +140,8 @@ export default function InventoryPage() {
         }
     };
 
-    const openModal = (product?: Product) => {
+    const openModal = (product?: Product, catalogItem?: CatalogItem) => {
+        setIsScanning(false);
         if (product) {
             setEditingProduct(product);
             setFormData({
@@ -146,7 +152,19 @@ export default function InventoryPage() {
                 barcode: product.barcode || "",
                 isLoose: product.isLoose,
                 unit: product.unit || "pcs",
-                initialStock: "" // Don't show current stock in edit for now, strictly product details
+                initialStock: "" // Don't show current stock in edit
+            });
+        } else if (catalogItem) {
+            setEditingProduct(null);
+            setFormData({
+                name: catalogItem.name,
+                price: "",
+                costPrice: "",
+                category: catalogItem.category,
+                barcode: "",
+                isLoose: false,
+                unit: "pcs",
+                initialStock: "0"
             });
         } else {
             setEditingProduct(null);
@@ -166,6 +184,7 @@ export default function InventoryPage() {
 
     const closeModal = () => {
         setIsModalOpen(false);
+        setIsScanning(false);
         setEditingProduct(null);
     };
 
@@ -175,204 +194,277 @@ export default function InventoryPage() {
     );
 
     return (
-        <div className="p-4 max-w-7xl mx-auto">
-            {/* ... Header ... */}
-            <div className="flex justify-between items-center mb-6">
-                <h1 className="text-2xl font-bold">Inventory</h1>
-                <button onClick={() => openModal()} className="btn btn-primary gap-2">
-                    <Plus className="w-4 h-4" /> Add Product
-                </button>
+        <div className="p-4 max-w-7xl mx-auto space-y-6">
+            {/* Header & Tabs */}
+            <div className="flex flex-col md:flex-row justify-between items-center gap-4">
+                <h1 className="text-3xl font-bold flex items-center gap-2">
+                    Inventory
+                </h1>
+
+                <div className="join bg-base-100 border border-base-200 shadow-sm p-1 rounded-full">
+                    <button
+                        className={`join-item btn btn-sm rounded-full ${activeTab === 'inventory' ? 'btn-neutral' : 'btn-ghost'}`}
+                        onClick={() => setActiveTab('inventory')}
+                    >
+                        <Package className="w-4 h-4 mr-2" /> My Stock
+                    </button>
+                    <button
+                        className={`join-item btn btn-sm rounded-full ${activeTab === 'catalog' ? 'btn-neutral' : 'btn-ghost'}`}
+                        onClick={() => setActiveTab('catalog')}
+                    >
+                        <Globe className="w-4 h-4 mr-2" /> Global Catalog
+                    </button>
+                </div>
             </div>
 
-            {/* Search Bar */}
-            <div className="relative mb-6">
-                <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 w-5 h-5" />
-                <input
-                    type="text"
-                    placeholder="Search by name or barcode..."
-                    className="input input-bordered w-full pl-10"
-                    value={searchTerm}
-                    onChange={(e) => setSearchTerm(e.target.value)}
-                />
-            </div>
-
-            {/* Product List */}
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                {filteredProducts?.map((product) => (
-                    <div key={product.id} className="card bg-base-100 shadow-sm border border-base-200">
-                        <div className="card-body p-4">
-                            <div className="flex justify-between items-start">
-                                <div>
-                                    <h3 className="font-bold text-lg">{product.name}</h3>
-                                    <p className="text-sm opacity-70">{product.category}</p>
-                                    <div className="badge badge-outline mt-2">{product.isLoose ? 'Loose' : 'Packaged'}</div>
-                                </div>
-                                <div className="text-right">
-                                    <div className="font-bold text-xl">₹{product.price}</div>
-                                    <div className="text-xs opacity-50">per {product.unit}</div>
-                                    {product.costPrice && <div className="text-xs text-info mt-1">CP: ₹{product.costPrice}</div>}
-                                </div>
-                            </div>
-                            <div className="card-actions justify-end mt-4 pt-4 border-t border-base-200">
-                                <button onClick={() => openModal(product)} className="btn btn-sm btn-ghost text-primary">
-                                    <Edit className="w-4 h-4" />
-                                </button>
-                                <button onClick={() => handleDelete(product.id)} className="btn btn-sm btn-ghost text-error">
-                                    <Trash2 className="w-4 h-4" />
-                                </button>
-                            </div>
+            {/* Content Area */}
+            {activeTab === 'inventory' ? (
+                <>
+                    {/* Toolbar */}
+                    <div className="flex justify-between items-center">
+                        <div className="relative w-full max-w-md">
+                            <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-base-content/50 w-5 h-5" />
+                            <input
+                                type="text"
+                                placeholder="Search by name or barcode..."
+                                className="input input-bordered w-full pl-10"
+                                value={searchTerm}
+                                onChange={(e) => setSearchTerm(e.target.value)}
+                            />
                         </div>
+                        <button onClick={() => openModal()} className="btn btn-primary gap-2 ml-4">
+                            <Plus className="w-4 h-4" /> Add Product
+                        </button>
                     </div>
-                ))}
-            </div>
 
-            {/* Add/Edit Modal */}
+                    {/* Product List */}
+                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                        {filteredProducts?.length === 0 && (
+                            <div className="col-span-full py-16 text-center opacity-50 flex flex-col items-center">
+                                <Package className="w-16 h-16 mb-4 opacity-20" />
+                                <h3 className="text-lg font-bold">No products found</h3>
+                                <p className="text-sm">Try adding from the Global Catalog or create a new one.</p>
+                                <button className="btn btn-sm btn-link mt-2" onClick={() => setActiveTab('catalog')}>Go to Catalog</button>
+                            </div>
+                        )}
+                        {filteredProducts?.map((product) => (
+                            <div key={product.id} className="card bg-base-100 shadow-sm border border-base-200 hover:border-primary/50 transition-colors group">
+                                <div className="card-body p-4">
+                                    <div className="flex justify-between items-start">
+                                        <div>
+                                            <h3 className="font-bold text-lg">{product.name}</h3>
+                                            <p className="text-sm opacity-70">{product.category}</p>
+                                            {product.isLoose && <div className="badge badge-sm badge-outline mt-1 font-mono text-[10px] uppercase">Loose</div>}
+                                        </div>
+                                        <div className="text-right">
+                                            <div className="font-bold text-xl">₹{product.price}</div>
+                                            <div className="text-xs opacity-50">/{product.unit}</div>
+                                        </div>
+                                    </div>
+                                    <div className="card-actions justify-end mt-4 pt-4 border-t border-base-200 opacity-0 group-hover:opacity-100 transition-opacity">
+                                        <button onClick={() => openModal(product)} className="btn btn-sm btn-ghost text-primary tooltip" data-tip="Edit">
+                                            <Edit className="w-4 h-4" />
+                                        </button>
+                                        <button onClick={() => handleDelete(product.id)} className="btn btn-sm btn-ghost text-error tooltip" data-tip="Delete">
+                                            <Trash2 className="w-4 h-4" />
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+                        ))}
+                    </div>
+                </>
+            ) : (
+                // Catalog Tab
+                <GlobalCatalog
+                    onAddProduct={(item) => openModal(undefined, item)}
+                    existingProductNames={existingProductNames}
+                />
+            )}
+
+            {/* Add/Edit Modal (Shared) */}
             {isModalOpen && (
                 <div className="modal modal-open modal-bottom sm:modal-middle">
                     <div className="modal-box no-scrollbar max-h-[90vh] overflow-y-auto">
-                        <h3 className="font-bold text-lg mb-6">{editingProduct ? 'Edit Product' : 'Add New Product'}</h3>
-                        <form onSubmit={handleSave} className="flex flex-col gap-4">
-                            <div className="form-control w-full">
-                                <label className="label pt-0 pb-1">
-                                    <span className="label-text font-medium">Product Name</span>
-                                </label>
-                                <input
-                                    required
-                                    type="text"
-                                    placeholder="e.g. Tata Salt"
-                                    className="input input-bordered w-full"
-                                    value={formData.name}
-                                    onChange={e => setFormData({ ...formData, name: e.target.value })}
-                                />
-                            </div>
+                        <button className="btn btn-sm btn-circle btn-ghost absolute right-2 top-2" onClick={closeModal}>✕</button>
+                        <h3 className="font-bold text-xl mb-6 flex items-center gap-2">
+                            {editingProduct ? <Edit className="w-5 h-5" /> : <Plus className="w-5 h-5" />}
+                            {editingProduct ? 'Edit Product' : 'Add to Inventory'}
+                        </h3>
 
-                            <div className="grid grid-cols-2 gap-4">
+                        {isScanning ? (
+                            <div className="flex flex-col items-center justify-center p-4">
+                                <h4 className="font-bold mb-4">Scan Product Barcode</h4>
+                                <div className="w-full max-w-sm aspect-square overflow-hidden rounded-xl border-2 border-primary">
+                                    <BarcodeScanner
+                                        onScanSuccess={(code) => {
+                                            setFormData({ ...formData, barcode: code });
+                                            setIsScanning(false);
+                                            toast.success(`Scanned: ${code}`);
+                                        }}
+                                        onScanFailure={(err) => { }}
+                                    />
+                                </div>
+                                <button className="btn btn-ghost mt-4" onClick={() => setIsScanning(false)}>
+                                    <X className="w-4 h-4 mr-2" /> Cancel Scan
+                                </button>
+                            </div>
+                        ) : (
+                            <form onSubmit={handleSave} className="flex flex-col gap-4">
                                 <div className="form-control w-full">
                                     <label className="label pt-0 pb-1">
-                                        <span className="label-text font-medium">Selling Price (₹)</span>
+                                        <span className="label-text font-medium opacity-70">Product Name</span>
                                     </label>
                                     <input
                                         required
-                                        type="number"
-                                        step="0.01"
-                                        placeholder="0.00"
-                                        className="input input-bordered w-full"
-                                        value={formData.price}
-                                        onChange={e => setFormData({ ...formData, price: e.target.value })}
+                                        type="text"
+                                        placeholder="e.g. Tata Salt"
+                                        className="input input-bordered w-full font-medium"
+                                        value={formData.name}
+                                        onChange={e => setFormData({ ...formData, name: e.target.value })}
                                     />
                                 </div>
-                                <div className="form-control w-full">
-                                    <label className="label pt-0 pb-1">
-                                        <span className="label-text font-medium">Cost Price (₹)</span>
-                                    </label>
-                                    <input
-                                        type="number"
-                                        step="0.01"
-                                        placeholder="0.00"
-                                        className="input input-bordered w-full"
-                                        value={formData.costPrice}
-                                        onChange={e => setFormData({ ...formData, costPrice: e.target.value })}
-                                    />
-                                </div>
-                            </div>
 
-                            <div className="grid grid-cols-2 gap-4">
-                                <div className="form-control w-full">
-                                    <label className="label pt-0 pb-1">
-                                        <span className="label-text font-medium">Category</span>
-                                    </label>
-                                    <select
-                                        className="select select-bordered w-full"
-                                        value={formData.category}
-                                        onChange={e => setFormData({ ...formData, category: e.target.value })}
-                                    >
-                                        <option>General</option>
-                                        <option>Groceries</option>
-                                        <option>Vegetables</option>
-                                        <option>Snacks</option>
-                                        <option>Dairy</option>
-                                    </select>
-                                </div>
-                                <div className="form-control w-full">
-                                    <label className="label pt-0 pb-1">
-                                        <span className="label-text font-medium">Unit</span>
-                                    </label>
-                                    <select
-                                        className="select select-bordered w-full"
-                                        value={formData.unit}
-                                        onChange={e => setFormData({ ...formData, unit: e.target.value })}
-                                    >
-                                        <option value="pcs">Pieces (pcs)</option>
-                                        <option value="kg">Kilogram (kg)</option>
-                                        <option value="g">Gram (g)</option>
-                                        <option value="l">Liter (l)</option>
-                                        <option value="ml">Milliliter (ml)</option>
-                                    </select>
-                                </div>
-                            </div>
-
-                            {!editingProduct && (
-                                <div className="form-control w-full">
-                                    <label className="label pt-0 pb-1">
-                                        <span className="label-text font-medium">Opening Stock</span>
-                                    </label>
-                                    <div className="join w-full">
+                                <div className="grid grid-cols-2 gap-4">
+                                    <div className="form-control w-full">
+                                        <label className="label pt-0 pb-1">
+                                            <span className="label-text font-medium opacity-70">Selling Price (₹)</span>
+                                        </label>
+                                        <input
+                                            required
+                                            type="number"
+                                            step="0.01"
+                                            placeholder="0.00"
+                                            className="input input-bordered w-full"
+                                            value={formData.price}
+                                            onChange={e => setFormData({ ...formData, price: e.target.value })}
+                                        />
+                                    </div>
+                                    <div className="form-control w-full">
+                                        <label className="label pt-0 pb-1">
+                                            <span className="label-text font-medium opacity-70">Cost Price (₹)</span>
+                                        </label>
                                         <input
                                             type="number"
                                             step="0.01"
-                                            placeholder="0"
-                                            className="input input-bordered w-full join-item"
-                                            value={formData.initialStock}
-                                            onChange={e => setFormData({ ...formData, initialStock: e.target.value })}
+                                            placeholder="0.00"
+                                            className="input input-bordered w-full"
+                                            value={formData.costPrice}
+                                            onChange={e => setFormData({ ...formData, costPrice: e.target.value })}
                                         />
-                                        <div className="btn btn-disabled join-item text-base-content/70">{formData.unit}</div>
                                     </div>
-
                                 </div>
-                            )}
 
-                            <div className="form-control w-full">
-                                <label className="label pt-0 pb-1">
-                                    <span className="label-text font-medium">Barcode (Optional)</span>
-                                </label>
-                                <input
-                                    type="text"
-                                    placeholder="Scan or type barcode"
-                                    className="input input-bordered w-full"
-                                    value={formData.barcode}
-                                    onChange={e => setFormData({ ...formData, barcode: e.target.value })}
-                                />
-                            </div>
-
-                            <div className="form-control">
-                                <label className="label cursor-pointer justify-start gap-4 p-3 border border-base-200 rounded-lg hover:border-primary/50 transition-colors">
-                                    <input
-                                        type="checkbox"
-                                        className="toggle toggle-primary toggle-sm"
-                                        checked={formData.isLoose}
-                                        onChange={e => {
-                                            const isLoose = e.target.checked;
-                                            setFormData({
-                                                ...formData,
-                                                isLoose,
-                                                unit: isLoose ? 'kg' : 'pcs'
-                                            });
-                                        }}
-                                    />
-                                    <div className="flex flex-col cursor-pointer">
-                                        <span className="label-text font-medium">Loose Item</span>
-                                        <span className="label-text-alt text-gray-500">Sold by weight</span>
+                                <div className="grid grid-cols-2 gap-4">
+                                    <div className="form-control w-full">
+                                        <label className="label pt-0 pb-1">
+                                            <span className="label-text font-medium opacity-70">Category</span>
+                                        </label>
+                                        <select
+                                            className="select select-bordered w-full"
+                                            value={formData.category}
+                                            onChange={e => setFormData({ ...formData, category: e.target.value })}
+                                        >
+                                            <option>General</option>
+                                            <option>Groceries</option>
+                                            <option>Vegetables</option>
+                                            <option>Snacks</option>
+                                            <option>Dairy</option>
+                                            <option>Personal Care</option>
+                                            <option>Household</option>
+                                        </select>
                                     </div>
-                                </label>
-                            </div>
+                                    <div className="form-control w-full">
+                                        <label className="label pt-0 pb-1">
+                                            <span className="label-text font-medium opacity-70">Unit</span>
+                                        </label>
+                                        <select
+                                            className="select select-bordered w-full"
+                                            value={formData.unit}
+                                            onChange={e => setFormData({ ...formData, unit: e.target.value })}
+                                        >
+                                            <option value="pcs">Pieces (pcs)</option>
+                                            <option value="kg">Kilogram (kg)</option>
+                                            <option value="g">Gram (g)</option>
+                                            <option value="l">Liter (l)</option>
+                                            <option value="ml">Milliliter (ml)</option>
+                                        </select>
+                                    </div>
+                                </div>
 
-                            <div className="modal-action mt-6">
-                                <button type="button" className="btn btn-ghost" onClick={closeModal}>Cancel</button>
-                                <button type="submit" className="btn btn-primary" disabled={loading}>
-                                    {loading ? <Loader2 className="animate-spin" /> : 'Save Product'}
-                                </button>
-                            </div>
-                        </form>
+                                {!editingProduct && (
+                                    <div className="form-control w-full bg-base-200/30 p-4 rounded-xl border border-base-200">
+                                        <label className="label pt-0 pb-1">
+                                            <span className="label-text font-bold">Initial Stock <span className="text-error">*</span></span>
+                                        </label>
+                                        <div className="join w-full">
+                                            <input
+                                                type="number"
+                                                step="0.01"
+                                                placeholder="0"
+                                                className="input input-bordered w-full join-item font-bold"
+                                                value={formData.initialStock}
+                                                onChange={e => setFormData({ ...formData, initialStock: e.target.value })}
+                                            />
+                                            <div className="btn btn-disabled join-item text-base-content/70 border-base-300 bg-base-200">{formData.unit}</div>
+                                        </div>
+                                        <p className="text-xs opacity-50 mt-2">Required for inventory tracking</p>
+                                    </div>
+                                )}
+
+                                <div className="form-control w-full">
+                                    <label className="label pt-0 pb-1">
+                                        <span className="label-text font-medium opacity-70">Barcode</span>
+                                    </label>
+                                    <div className="join w-full">
+                                        <input
+                                            type="text"
+                                            placeholder="Scan or type barcode"
+                                            className="input input-bordered w-full join-item"
+                                            value={formData.barcode}
+                                            onChange={e => setFormData({ ...formData, barcode: e.target.value })}
+                                        />
+                                        <button
+                                            type="button"
+                                            className="btn btn-square join-item btn-primary"
+                                            onClick={() => setIsScanning(true)}
+                                            title="Scan Barcode"
+                                        >
+                                            <ScanBarcode className="w-5 h-5" />
+                                        </button>
+                                    </div>
+                                </div>
+
+                                <div className="form-control">
+                                    <label className="label cursor-pointer justify-start gap-4 p-3 border border-base-200 rounded-lg hover:border-primary/50 transition-colors">
+                                        <input
+                                            type="checkbox"
+                                            className="toggle toggle-primary toggle-sm"
+                                            checked={formData.isLoose}
+                                            onChange={e => {
+                                                const isLoose = e.target.checked;
+                                                setFormData({
+                                                    ...formData,
+                                                    isLoose,
+                                                    unit: isLoose ? 'kg' : 'pcs'
+                                                });
+                                            }}
+                                        />
+                                        <div className="flex flex-col cursor-pointer">
+                                            <span className="label-text font-medium">Loose Item</span>
+                                            <span className="label-text-alt text-gray-500">Sold by weight (e.g. Rice, Dal)</span>
+                                        </div>
+                                    </label>
+                                </div>
+
+                                <div className="modal-action mt-6 pt-4 border-t border-base-200">
+                                    <button type="button" className="btn btn-ghost" onClick={closeModal}>Cancel</button>
+                                    <button type="submit" className="btn btn-primary px-8" disabled={loading}>
+                                        {loading ? <Loader2 className="animate-spin" /> : (editingProduct ? 'Update Product' : 'Add to Inventory')}
+                                    </button>
+                                </div>
+                            </form>
+                        )}
                     </div>
                 </div>
             )}

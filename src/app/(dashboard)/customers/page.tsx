@@ -132,7 +132,7 @@ export default function CustomersPage() {
 
     if (!userData) return <div className="flex justify-center items-center h-full"><Loader2 className="animate-spin w-10 h-10 text-primary" /></div>;
 
-    if (userData?.role !== 'shop-admin' && userData?.role !== 'superadmin' && userData?.role !== 'user') {
+    if (userData?.role !== 'shop-admin' && userData?.role !== 'superadmin' && userData?.role !== 'user' && userData?.role !== 'shop-user') {
         return <div className="p-10 text-center text-error">Access Restricted</div>;
     }
 

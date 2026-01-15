@@ -1,2 +1,102 @@
 @import "tailwindcss";
 @plugin "daisyui";
+
+:root {
+    /* Strict Black & White Theme Overrides */
+    --p: 0% 0 0;
+    /* Primary: Black */
+    --pc: 100% 0 0;
+    /* Primary Content: White */
+
+    --s: 30% 0 0;
+    /* Secondary: Dark Gray */
+    --sc: 100% 0 0;
+    /* Secondary Content: White */
+
+    --a: 60% 0 0;
+    /* Accent: Gray */
+    --ac: 0% 0 0;
+    /* Accent Content: Black */
+
+    --n: 20% 0 0;
+    /* Neutral: Dark Gray */
+    --nc: 100% 0 0;
+    /* Neutral Content: White */
+
+    --b1: 100% 0 0;
+    /* Base 100: White */
+    --b2: 96% 0 0;
+    /* Base 200: Light Gray (f5f5f5) */
+    --b3: 90% 0 0;
+    /* Base 300: Gray */
+    --bc: 0% 0 0;
+    /* Base Content: Black */
+
+    /* Functional Colors forced to B&W/Grayscale */
+    --in: 0% 0 0;
+    /* Info: Black */
+    --inc: 100% 0 0;
+
+    --su: 80% 0 0;
+    /* Success: Light Gray (or keep Green? User said B&W) */
+    /* Let's keep Success/Error as colors for usability, OR make them distinct Grays? 
+       Usually "Black & White" refers to the brand. Alerts might need color.
+       But I will make Info and Warnings monochrome.
+       I'll leave Success/Error defaults for now, but Primary is the big one.
+    */
+
+    --rounded-box: 0.5rem;
+    --rounded-btn: 0.25rem;
+}
+
+/* BRUTE FORCE OVERRIDES to ensure Black & White */
+.btn-primary {
+    background-color: #000000 !important;
+    border-color: #000000 !important;
+    color: #ffffff !important;
+}
+
+.text-primary {
+    color: #000000 !important;
+}
+
+.badge-primary {
+    background-color: #000000 !important;
+    border-color: #000000 !important;
+    color: #ffffff !important;
+}
+
+/* Ensure secondary is gray */
+.btn-secondary {
+    background-color: #4a4a4a !important;
+    border-color: #4a4a4a !important;
+    color: #ffffff !important;
+}
+
+
+/* Custom Utilities for Printing */
+@media print {
+    .no-print {
+        display: none !important;
+    }
+
+    .print-only {
+        display: block !important;
+    }
+
+    body {
+        background: white;
+        color: black;
+    }
+}
+
+/* Hide Spinners */
+input.no-spinner::-webkit-outer-spin-button,
+input.no-spinner::-webkit-inner-spin-button {
+    -webkit-appearance: none;
+    margin: 0;
+}
+
+input.no-spinner {
+    -moz-appearance: textfield;
+}

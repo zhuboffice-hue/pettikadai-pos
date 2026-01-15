@@ -41,9 +41,9 @@ export interface Bill {
     items: BillItem[];
     totalAmount: number;
     paymentMode: 'cash' | 'upi' | 'credit' | 'split';
-    customerId?: string; // Optional
-    customerName?: string; // Snapshot of name at time of bill
-    customerPhone?: string; // Snapshot of phone
+    customerId?: string | null; // Optional
+    customerName?: string | null; // Snapshot of name at time of bill
+    customerPhone?: string | null; // Snapshot of phone
     profit?: number; // Calculated profit
     createdAt: number;
     status: 'completed' | 'hold';

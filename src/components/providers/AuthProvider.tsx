@@ -46,7 +46,28 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
                     const userDoc = await getDoc(userRef);
 
                     if (userDoc.exists()) {
-                        const data = userDoc.data() as UserData;
+                        let data = userDoc.data() as UserData;
+
+                        // Check for pending invite if role is 'user' (default) to upgrade them
+                        if (data.role === 'user' && firebaseUser.email) {
+                            const inviteRef = doc(db, "invites", firebaseUser.email);
+                            const inviteDoc = await getDoc(inviteRef);
+
+                            if (inviteDoc.exists()) {
+                                const inviteData = inviteDoc.data();
+                                const upgrades: Partial<UserData> = {
+                                    role: inviteData.role,
+                                    shopId: inviteData.shopId,
+                                    isApproved: true,
+                                };
+                                // Update Firestore
+                                await setDoc(userRef, upgrades, { merge: true });
+                                // Update Local State
+                                data = { ...data, ...upgrades };
+                                toast.success(`Joined Shop as ${inviteData.role.replace('-', ' ')}`);
+                            }
+                        }
+
                         setUserData(data);
                         checkTrialStatus(data);
                     } else {
