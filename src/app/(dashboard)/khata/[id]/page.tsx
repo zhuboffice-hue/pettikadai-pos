@@ -1,5 +1,7 @@
 "use client";
 
+export const runtime = 'edge';
+
 import { useLiveQuery } from "dexie-react-hooks";
 import { db, KhataTransaction } from "@/lib/db/db";
 import { useParams, useRouter } from "next/navigation";
