@@ -127,18 +127,18 @@ export default function DashboardLayout({
             </main>
 
             {/* Bottom Navigation for Mobile */}
-            <div className="btm-nav lg:hidden z-50 border-t border-base-200 bg-base-100 shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.05)] print:hidden">
+            <div className="btm-nav md:hidden z-50 border-t border-base-200 bg-base-100 shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.05)] print:hidden h-16">
                 {filteredLinks.map((link) => {
                     const Icon = link.icon;
                     const isActive = pathname === link.href;
                     return (
                         <button
                             key={link.name}
-                            className={`${isActive ? 'active text-primary bg-primary/10' : 'text-base-content/70'}`}
+                            className={`${isActive ? 'active text-primary bg-primary/5' : 'text-base-content/60'} hover:bg-base-200 transition-colors flex flex-col items-center justify-center gap-1 min-w-0 px-1`}
                             onClick={() => router.push(link.href)}
                         >
-                            <Icon className="h-5 w-5" />
-                            <span className="btm-nav-label text-xs">{link.name}</span>
+                            <Icon className={`h-5 w-5 ${isActive ? 'stroke-2' : ''}`} />
+                            <span className="text-[10px] font-medium leading-none w-full text-center truncate">{link.name}</span>
                         </button>
                     );
                 })}
