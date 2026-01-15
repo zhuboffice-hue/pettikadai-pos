@@ -9,6 +9,8 @@ import { toast } from "react-hot-toast";
 import { Loader2 } from "lucide-react";
 import { FcGoogle } from "react-icons/fc";
 
+import Image from "next/image";
+
 export default function LoginPage() {
     const [loading, setLoading] = useState(false);
     const router = useRouter();
@@ -31,8 +33,17 @@ export default function LoginPage() {
     return (
         <div className="min-h-screen flex items-center justify-center bg-base-200 px-4">
             <div className="card w-full max-w-sm shadow-xl bg-base-100">
-                <div className="card-body text-center">
-                    <h2 className="card-title justify-center text-2xl font-bold mb-2">
+                <div className="card-body text-center items-center">
+                    <div className="relative w-32 h-32 mb-2">
+                        <Image
+                            src="/logo.png"
+                            alt="Logo"
+                            fill
+                            className="object-contain"
+                            priority
+                        />
+                    </div>
+                    <h2 className="card-title justify-center text-2xl font-bold mb-2 sr-only">
                         Pettikadai POS
                     </h2>
                     <p className="text-sm opacity-70 mb-6">Ultra-fast billing for Kirana Stores</p>

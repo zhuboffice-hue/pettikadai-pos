@@ -26,9 +26,12 @@ export default function InventoryPage() {
     const [formData, setFormData] = useState({
         name: "",
         price: "",
+        costPrice: "",
         category: "General",
         barcode: "",
-        isLoose: false
+        isLoose: false,
+        unit: "pcs",
+        initialStock: ""
     });
 
     const handleSave = async (e: React.FormEvent) => {
@@ -47,17 +50,22 @@ export default function InventoryPage() {
                 shopId: shopId,
                 name: formData.name,
                 price: parseFloat(formData.price),
+                costPrice: formData.costPrice ? parseFloat(formData.costPrice) : undefined,
                 category: formData.category,
                 barcode: formData.barcode,
                 isLoose: formData.isLoose,
-                unit: formData.isLoose ? 'kg' : 'pcs',
+                unit: formData.unit,
                 synced: false
             };
 
             // 1. Save to Local DB (Dexie)
             if (editingProduct) {
                 await db.products.put(productData);
-                await db.inventory.update(editingProduct.id, { lastUpdated: Date.now(), synced: false });
+                // Also update unit in inventory if needed (though inventory doesn't store unit, UI uses product's unit)
+                // If stock was edited, we might need a separate 'Adjust Stock' feature, 
+                // but for now we only update product details here.
+
+                await db.inventory.where('productId').equals(editingProduct.id).modify({ lastUpdated: Date.now(), synced: false });
 
                 // Add to Sync Queue
                 await db.syncQueue.add({
@@ -71,11 +79,13 @@ export default function InventoryPage() {
                 toast.success("Product updated!");
             } else {
                 await db.products.add(productData);
-                // Initialize Inventory
+                // Initialize Inventory with Initial Stock
+                const initialStockVal = formData.initialStock ? parseFloat(formData.initialStock) : 0;
+
                 await db.inventory.add({
                     productId: productData.id,
                     shopId: shopId,
-                    currentStock: 0,
+                    currentStock: initialStockVal,
                     lowStockThreshold: 5,
                     lastUpdated: Date.now(),
                     synced: false
@@ -131,18 +141,24 @@ export default function InventoryPage() {
             setFormData({
                 name: product.name,
                 price: product.price.toString(),
+                costPrice: product.costPrice?.toString() || "",
                 category: product.category,
                 barcode: product.barcode || "",
-                isLoose: product.isLoose
+                isLoose: product.isLoose,
+                unit: product.unit || "pcs",
+                initialStock: "" // Don't show current stock in edit for now, strictly product details
             });
         } else {
             setEditingProduct(null);
             setFormData({
                 name: "",
                 price: "",
+                costPrice: "",
                 category: "General",
                 barcode: "",
-                isLoose: false
+                isLoose: false,
+                unit: "pcs",
+                initialStock: ""
             });
         }
         setIsModalOpen(true);
@@ -160,6 +176,7 @@ export default function InventoryPage() {
 
     return (
         <div className="p-4 max-w-7xl mx-auto">
+            {/* ... Header ... */}
             <div className="flex justify-between items-center mb-6">
                 <h1 className="text-2xl font-bold">Inventory</h1>
                 <button onClick={() => openModal()} className="btn btn-primary gap-2">
@@ -193,6 +210,7 @@ export default function InventoryPage() {
                                 <div className="text-right">
                                     <div className="font-bold text-xl">₹{product.price}</div>
                                     <div className="text-xs opacity-50">per {product.unit}</div>
+                                    {product.costPrice && <div className="text-xs text-info mt-1">CP: ₹{product.costPrice}</div>}
                                 </div>
                             </div>
                             <div className="card-actions justify-end mt-4 pt-4 border-t border-base-200">
@@ -211,18 +229,18 @@ export default function InventoryPage() {
             {/* Add/Edit Modal */}
             {isModalOpen && (
                 <div className="modal modal-open modal-bottom sm:modal-middle">
-                    <div className="modal-box">
+                    <div className="modal-box no-scrollbar max-h-[90vh] overflow-y-auto">
                         <h3 className="font-bold text-lg mb-6">{editingProduct ? 'Edit Product' : 'Add New Product'}</h3>
-                        <form onSubmit={handleSave} className="flex flex-col gap-5">
+                        <form onSubmit={handleSave} className="flex flex-col gap-4">
                             <div className="form-control w-full">
-                                <label className="label pt-0 pb-2">
+                                <label className="label pt-0 pb-1">
                                     <span className="label-text font-medium">Product Name</span>
                                 </label>
                                 <input
                                     required
                                     type="text"
                                     placeholder="e.g. Tata Salt"
-                                    className="input input-bordered w-full focus:outline-none focus:ring-2 focus:ring-primary/20"
+                                    className="input input-bordered w-full"
                                     value={formData.name}
                                     onChange={e => setFormData({ ...formData, name: e.target.value })}
                                 />
@@ -230,25 +248,41 @@ export default function InventoryPage() {
 
                             <div className="grid grid-cols-2 gap-4">
                                 <div className="form-control w-full">
-                                    <label className="label pt-0 pb-2">
-                                        <span className="label-text font-medium">Price (₹)</span>
+                                    <label className="label pt-0 pb-1">
+                                        <span className="label-text font-medium">Selling Price (₹)</span>
                                     </label>
                                     <input
                                         required
                                         type="number"
                                         step="0.01"
                                         placeholder="0.00"
-                                        className="input input-bordered w-full focus:outline-none focus:ring-2 focus:ring-primary/20"
+                                        className="input input-bordered w-full"
                                         value={formData.price}
                                         onChange={e => setFormData({ ...formData, price: e.target.value })}
                                     />
                                 </div>
                                 <div className="form-control w-full">
-                                    <label className="label pt-0 pb-2">
+                                    <label className="label pt-0 pb-1">
+                                        <span className="label-text font-medium">Cost Price (₹)</span>
+                                    </label>
+                                    <input
+                                        type="number"
+                                        step="0.01"
+                                        placeholder="0.00"
+                                        className="input input-bordered w-full"
+                                        value={formData.costPrice}
+                                        onChange={e => setFormData({ ...formData, costPrice: e.target.value })}
+                                    />
+                                </div>
+                            </div>
+
+                            <div className="grid grid-cols-2 gap-4">
+                                <div className="form-control w-full">
+                                    <label className="label pt-0 pb-1">
                                         <span className="label-text font-medium">Category</span>
                                     </label>
                                     <select
-                                        className="select select-bordered w-full focus:outline-none focus:ring-2 focus:ring-primary/20"
+                                        className="select select-bordered w-full"
                                         value={formData.category}
                                         onChange={e => setFormData({ ...formData, category: e.target.value })}
                                     >
@@ -256,24 +290,58 @@ export default function InventoryPage() {
                                         <option>Groceries</option>
                                         <option>Vegetables</option>
                                         <option>Snacks</option>
+                                        <option>Dairy</option>
+                                    </select>
+                                </div>
+                                <div className="form-control w-full">
+                                    <label className="label pt-0 pb-1">
+                                        <span className="label-text font-medium">Unit</span>
+                                    </label>
+                                    <select
+                                        className="select select-bordered w-full"
+                                        value={formData.unit}
+                                        onChange={e => setFormData({ ...formData, unit: e.target.value })}
+                                    >
+                                        <option value="pcs">Pieces (pcs)</option>
+                                        <option value="kg">Kilogram (kg)</option>
+                                        <option value="g">Gram (g)</option>
+                                        <option value="l">Liter (l)</option>
+                                        <option value="ml">Milliliter (ml)</option>
                                     </select>
                                 </div>
                             </div>
 
+                            {!editingProduct && (
+                                <div className="form-control w-full">
+                                    <label className="label pt-0 pb-1">
+                                        <span className="label-text font-medium">Opening Stock</span>
+                                    </label>
+                                    <div className="join w-full">
+                                        <input
+                                            type="number"
+                                            step="0.01"
+                                            placeholder="0"
+                                            className="input input-bordered w-full join-item"
+                                            value={formData.initialStock}
+                                            onChange={e => setFormData({ ...formData, initialStock: e.target.value })}
+                                        />
+                                        <div className="btn btn-disabled join-item text-base-content/70">{formData.unit}</div>
+                                    </div>
+
+                                </div>
+                            )}
+
                             <div className="form-control w-full">
-                                <label className="label pt-0 pb-2">
+                                <label className="label pt-0 pb-1">
                                     <span className="label-text font-medium">Barcode (Optional)</span>
                                 </label>
-                                <div className="join w-full">
-                                    <input
-                                        type="text"
-                                        placeholder="Scan or type barcode"
-                                        className="input input-bordered w-full join-item focus:outline-none focus:ring-2 focus:ring-primary/20"
-                                        value={formData.barcode}
-                                        onChange={e => setFormData({ ...formData, barcode: e.target.value })}
-                                    />
-                                    {/* Placeholder for future scan button if needed */}
-                                </div>
+                                <input
+                                    type="text"
+                                    placeholder="Scan or type barcode"
+                                    className="input input-bordered w-full"
+                                    value={formData.barcode}
+                                    onChange={e => setFormData({ ...formData, barcode: e.target.value })}
+                                />
                             </div>
 
                             <div className="form-control">
@@ -282,11 +350,18 @@ export default function InventoryPage() {
                                         type="checkbox"
                                         className="toggle toggle-primary toggle-sm"
                                         checked={formData.isLoose}
-                                        onChange={e => setFormData({ ...formData, isLoose: e.target.checked })}
+                                        onChange={e => {
+                                            const isLoose = e.target.checked;
+                                            setFormData({
+                                                ...formData,
+                                                isLoose,
+                                                unit: isLoose ? 'kg' : 'pcs'
+                                            });
+                                        }}
                                     />
                                     <div className="flex flex-col cursor-pointer">
                                         <span className="label-text font-medium">Loose Item</span>
-                                        <span className="label-text-alt text-gray-500">Sold by weight (kg/g) instead of quantity</span>
+                                        <span className="label-text-alt text-gray-500">Sold by weight</span>
                                     </div>
                                 </label>
                             </div>

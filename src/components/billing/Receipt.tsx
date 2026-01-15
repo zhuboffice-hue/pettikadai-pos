@@ -1,29 +1,43 @@
 import React, { forwardRef } from 'react';
-import { Bill } from '@/lib/db/db';
+import { Bill, StoreSettings } from '@/lib/db/db';
 
 interface ReceiptProps {
     bill: Bill;
-    shopDetails?: {
-        name: string;
-        address?: string;
-        phone?: string;
-    };
+    settings?: StoreSettings;
 }
 
-export const Receipt = forwardRef<HTMLDivElement, ReceiptProps>(({ bill, shopDetails }, ref) => {
+export const Receipt = forwardRef<HTMLDivElement, ReceiptProps>(({ bill, settings }, ref) => {
+    // GST Calculation
+    const gstRate = settings?.gstRate || 0;
+    const isGstEnabled = settings?.gstEnabled;
+
+    // Tax Component = Total * (Rate / (100 + Rate))
+    const taxAmount = isGstEnabled ? (bill.totalAmount * (gstRate / (100 + gstRate))) : 0;
+    const taxableAmount = bill.totalAmount - taxAmount;
+    const cgst = taxAmount / 2;
+    const sgst = taxAmount / 2;
+
     return (
         <div ref={ref} className="p-4 bg-white text-black font-mono text-sm w-[80mm] mx-auto hidden print:block">
+            {/* Header */}
             <div className="text-center mb-4 border-b border-black pb-2">
-                <h1 className="font-bold text-xl uppercase">{shopDetails?.name || 'Kirana Shop'}</h1>
-                {shopDetails?.address && <p>{shopDetails.address}</p>}
-                {shopDetails?.phone && <p>Ph: {shopDetails.phone}</p>}
-                <p className="border-t border-black mt-1 pt-1">
-                    Date: {new Date(bill.createdAt).toLocaleString()}
-                </p>
-                <p>Bill #: {bill.id.slice(0, 8)}</p>
+                <h1 className="font-bold text-xl uppercase">{settings?.storeName || 'Kirana Shop'}</h1>
+                {settings?.address && <p className="whitespace-pre-line">{settings.address}</p>}
+                {settings?.phone && <p>Ph: {settings.phone}</p>}
+                {isGstEnabled && settings?.gstNumber && (
+                    <p className="font-bold mt-1">GSTIN: {settings.gstNumber}</p>
+                )}
+
+                <div className="flex justify-between border-t border-black mt-2 pt-1 text-xs">
+                    <span>Date: {new Date(bill.createdAt).toLocaleDateString()}</span>
+                    <span>Time: {new Date(bill.createdAt).toLocaleTimeString()}</span>
+                </div>
+                <div className="text-left text-xs">Bill #: {bill.id.slice(0, 8)}</div>
+                {bill.customerName && <div className="text-left text-xs">Cust: {bill.customerName}</div>}
             </div>
 
-            <table className="w-full text-left mb-4">
+            {/* Items */}
+            <table className="w-full text-left mb-4 text-xs">
                 <thead>
                     <tr className="border-b border-black">
                         <th className="w-[45%]">Item</th>
@@ -36,26 +50,47 @@ export const Receipt = forwardRef<HTMLDivElement, ReceiptProps>(({ bill, shopDet
                         <tr key={idx}>
                             <td className="truncate pr-1">{item.name}</td>
                             <td className="text-right">{item.qty} x {item.price}</td>
-                            <td className="text-right">{item.total}</td>
+                            <td className="text-right">{item.total.toFixed(2)}</td>
                         </tr>
                     ))}
                 </tbody>
             </table>
 
+            {/* Totals */}
             <div className="border-t border-black pt-2 space-y-1">
                 <div className="flex justify-between font-bold text-lg">
                     <span>TOTAL</span>
-                    <span>₹{bill.totalAmount}</span>
+                    <span>₹{bill.totalAmount.toFixed(2)}</span>
                 </div>
-                <div className="flex justify-between text-xs">
+
+                {/* GST Breakdown */}
+                {isGstEnabled && gstRate > 0 && (
+                    <div className="text-[10px] grid grid-cols-2 gap-x-4 border-t border-dashed border-gray-400 pt-1 mt-1">
+                        <span>Taxable Amt:</span>
+                        <span className="text-right">₹{taxableAmount.toFixed(2)}</span>
+
+                        <span>CGST ({(gstRate / 2)}%):</span>
+                        <span className="text-right">₹{cgst.toFixed(2)}</span>
+
+                        <span>SGST ({(gstRate / 2)}%):</span>
+                        <span className="text-right">₹{sgst.toFixed(2)}</span>
+
+                        <span className="col-span-2 text-right italic font-medium mt-1">
+                            (Prices are inclusive of Tax)
+                        </span>
+                    </div>
+                )}
+
+                <div className="flex justify-between text-xs mt-2">
                     <span>Payment Mode</span>
-                    <span className="uppercase">{bill.paymentMode}</span>
+                    <span className="uppercase font-bold">{bill.paymentMode}</span>
                 </div>
             </div>
 
             <div className="text-center mt-6 text-xs">
                 <p>Thank you for shopping!</p>
                 <p>Visit Again</p>
+                {settings?.printerName && <p className="text-[8px] opacity-50 mt-2">{settings.printerName}</p>}
             </div>
         </div>
     );

@@ -62,7 +62,7 @@ export default function KhataPage() {
     return (
         <div className="container mx-auto max-w-5xl">
             <div className="flex justify-between items-center mb-6">
-                <h1 className="text-2xl font-bold">Kadan (Credit Book)</h1>
+                <h1 className="text-2xl font-bold">Kadan</h1>
                 <button className="btn btn-primary" onClick={() => setIsModalOpen(true)}>
                     <Plus className="w-4 h-4 mr-2" /> New Customer
                 </button>
