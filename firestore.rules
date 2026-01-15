@@ -1,0 +1,92 @@
+
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // Helper functions
+    function isSignedIn() {
+      return request.auth != null;
+    }
+    
+    function getUserData() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
+    }
+    
+    function isSuperAdmin() {
+      return getUserData().role == 'superadmin';
+    }
+    
+    function isShopAdmin(shopId) {
+      let userData = getUserData();
+      return (userData.role == 'shop-admin' || userData.role == 'user') && userData.shopId == shopId;
+    }
+    
+    function isShopUser(shopId) {
+      let userData = getUserData();
+      return userData.role == 'shop-user' && userData.shopId == shopId;
+    }
+
+    function hasShopAccess(shopId) {
+       return isSuperAdmin() || isShopAdmin(shopId) || isShopUser(shopId);
+    }
+
+    // --- Collections ---
+
+    // Users Collection
+    // Superadmin can read/write all.
+    // Users can read their own.
+    match /users/{userId} {
+      allow read: if isSignedIn() && (request.auth.uid == userId || isSuperAdmin());
+      allow write: if isSignedIn() && (request.auth.uid == userId || isSuperAdmin());
+    }
+
+    match /invites/{email} {
+        allow read: if isSignedIn() && (request.auth.token.email == email || isSuperAdmin() || isShopAdmin(resource.data.shopId));
+        allow write: if isSuperAdmin() || (
+            isShopAdmin(request.resource.data.shopId) && 
+            request.resource.data.role == 'shop-user'
+        );
+    }
+    
+    // Shop Data (Strict Isolation)
+    match /shops/{shopId} {
+      allow read: if isSignedIn() && hasShopAccess(shopId);
+      allow write: if isSignedIn() && (isSuperAdmin() || isShopAdmin(shopId));
+    }
+    
+    // Products
+    match /products/{productId} {
+      // Products technically belong to a shop, but the global 'products' collection 
+      // design in this prototype might need 'shopId' field for these rules to work perfectly.
+      // Assuming products have 'shopId' field.
+      allow read: if isSignedIn() && hasShopAccess(resource.data.shopId);
+      allow create: if isSignedIn() && hasShopAccess(request.resource.data.shopId);
+      allow update, delete: if isSignedIn() && hasShopAccess(resource.data.shopId);
+    }
+    
+    // General rule for collections that are children of 'shops' or have 'shopId' field
+    // Since we are using top-level collections in Dexie map, we likely use top-level in Firestore 
+    // with 'shopId' field for query filtering.
+    
+    match /bills/{billId} {
+      allow read: if isSignedIn() && hasShopAccess(resource.data.shopId);
+      allow create: if isSignedIn() && hasShopAccess(request.resource.data.shopId);
+      allow update: if isSignedIn() && hasShopAccess(resource.data.shopId); // No delete allowed for audit?
+    }
+
+    match /customers/{customerId} {
+      allow read: if isSignedIn() && hasShopAccess(resource.data.shopId);
+      allow write: if isSignedIn() && hasShopAccess(request.resource.data.shopId); // Users can modify customers (credit)
+    }
+
+    match /inventory/{itemId} {
+      allow read: if isSignedIn() && hasShopAccess(resource.data.shopId);
+      allow write: if isSignedIn() && hasShopAccess(request.resource.data.shopId);
+    }
+    
+    match /khata_transactions/{txId} {
+        allow read: if isSignedIn() && hasShopAccess(resource.data.shopId);
+        allow create: if isSignedIn() && hasShopAccess(request.resource.data.shopId);
+    }
+  }
+}
