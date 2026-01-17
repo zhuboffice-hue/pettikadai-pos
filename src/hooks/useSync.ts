@@ -7,6 +7,22 @@ import { useEffect, useState } from "react";
 import { toast } from "react-hot-toast";
 import { useAuth } from "@/components/providers/AuthProvider";
 
+// Helper to remove undefined values from an object (Firebase doesn't accept undefined)
+function removeUndefined(obj: any): any {
+    if (obj === null || obj === undefined) return null;
+    if (typeof obj !== 'object') return obj;
+    if (Array.isArray(obj)) return obj.map(removeUndefined);
+
+    const cleaned: any = {};
+    for (const key in obj) {
+        const value = obj[key];
+        if (value !== undefined) {
+            cleaned[key] = removeUndefined(value);
+        }
+    }
+    return cleaned;
+}
+
 export function useSync() {
     const { userData } = useAuth();
     const syncQueue = useLiveQuery(() => db.syncQueue.toArray());
@@ -57,13 +73,18 @@ export function useSync() {
             if (action === 'create' || action === 'update') {
                 // Remove local-only fields if any before sending to Firestore
                 const { synced, ...firestoreData } = data;
-                await setDoc(ref, { ...firestoreData, synced: true, updatedAt: Date.now() }, { merge: true });
+                // Remove undefined values - Firebase doesn't accept them
+                const cleanedData = removeUndefined({ ...firestoreData, synced: true, updatedAt: Date.now() });
+                await setDoc(ref, cleanedData, { merge: true });
 
                 // Update local doc status to synced
                 if (col === 'bills') await db.bills.update(docId, { synced: true });
                 if (col === 'products') await db.products.update(docId, { synced: true });
                 if (col === 'customers') await db.customers.update(docId, { synced: true });
-                if (col === 'inventory') await db.inventory.update(docId, { synced: true });
+                // Inventory uses productId as primary key, so use where().modify()
+                if (col === 'inventory') {
+                    await db.inventory.where('productId').equals(docId).modify({ synced: true });
+                }
 
             } else if (action === 'delete') {
                 await deleteDoc(ref);
@@ -176,7 +197,6 @@ export function useSync() {
             });
 
             toast.success("Data Synced Successfully!", { id: toastId });
-            setTimeout(() => window.location.reload(), 1000);
         } catch (error) {
             console.error(error);
             toast.error("Sync Failed. Check Console.", { id: toastId });

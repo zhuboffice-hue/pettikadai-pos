@@ -10,13 +10,14 @@
     "pages:build": "npx @cloudflare/next-on-pages"
   },
   "dependencies": {
+    "@zxing/browser": "^0.1.5",
+    "@zxing/library": "^0.21.3",
     "clsx": "^2.1.1",
     "date-fns": "^4.1.0",
     "dexie": "^4.2.1",
     "dexie-react-hooks": "^4.2.0",
     "firebase": "^12.7.0",
     "html2canvas": "^1.4.1",
-    "html5-qrcode": "^2.3.8",
     "jspdf": "^4.0.0",
     "lucide-react": "^0.562.0",
     "next": "16.1.1",
@@ -25,6 +26,7 @@
     "react-hot-toast": "^2.6.0",
     "react-icons": "^5.5.0",
     "tailwind-merge": "^3.4.0",
+    "tesseract.js": "^7.0.0",
     "uuid": "^13.0.0",
     "xlsx": "^0.18.5"
   },

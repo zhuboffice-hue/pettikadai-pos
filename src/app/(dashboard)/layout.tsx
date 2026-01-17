@@ -2,7 +2,7 @@
 
 import { useAuth } from "@/components/providers/AuthProvider";
 import { useRouter, usePathname } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
 import {
     Loader2, Wifi, WifiOff, RefreshCw, ShoppingCart, Package, Users, BarChart3, CreditCard,
     LayoutDashboard, FileText, Settings, Percent, LogOut, Menu, X, LayoutTemplate, Shield
@@ -22,7 +22,17 @@ export default function DashboardLayout({
     const { user, loading, isTrialExpired, userData } = useAuth();
     const router = useRouter();
     const pathname = usePathname();
-    const { isSyncing, online, pendingCount } = useSync();
+    const { isSyncing, online, pendingCount, manualSyncDown } = useSync();
+
+    // SAFE Auto-Sync: Runs only ONCE on mount per session
+    const hasSynced = useRef(false);
+
+    useEffect(() => {
+        if (user && userData?.shopId && online && !hasSynced.current) {
+            hasSynced.current = true;
+            manualSyncDown(userData.shopId);
+        }
+    }, [user, userData?.shopId, online, manualSyncDown]);
 
     useEffect(() => {
         if (!loading && !user) {
@@ -156,7 +166,7 @@ export default function DashboardLayout({
             </aside>
 
             {/* Mobile Header */}
-            <div className="lg:hidden sticky top-0 z-30 bg-base-100/90 backdrop-blur-md border-b border-base-200 px-4 h-20 flex items-center justify-between shadow-sm">
+            <div className="lg:hidden sticky top-0 z-30 bg-base-100/90 backdrop-blur-md border-b border-base-200 px-4 h-20 flex items-center justify-center shadow-sm">
                 <div className="relative w-32 h-12">
                     <Image
                         src="/logo.png"
@@ -165,11 +175,7 @@ export default function DashboardLayout({
                         className="object-contain"
                     />
                 </div>
-                {/* Mobile allows easier access, but usually the bottom nav is enough.
-                    Header gives space for status or other actions if needed.
-                */}
             </div>
-
 
             {/* Main Content */}
             <div className={`p-4 lg:ml-64 min-h-screen transition-all duration-300 pb-24 md:pb-6`}>
@@ -179,22 +185,22 @@ export default function DashboardLayout({
             </div>
 
             {/* Mobile Bottom Navigation */}
-            <div className="md:hidden fixed bottom-0 left-0 z-50 w-full bg-base-100/90 backdrop-blur-xl border-t border-base-200 pb-safe pt-1 shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.1)]">
-                <div className="flex justify-around items-center h-16 px-1">
-                    {filteredLinks.slice(0, 5).map((link) => { // Show max 5 items on mobile
+            <div className="lg:hidden fixed bottom-0 left-0 z-50 w-full bg-base-100/90 backdrop-blur-xl border-t border-base-200 pb-safe pt-1 shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.1)]">
+                <div className="flex overflow-x-auto no-scrollbar items-center h-16 px-1 gap-1">
+                    {filteredLinks.map((link) => {
                         const Icon = link.icon;
                         const isActive = pathname === link.href;
                         return (
                             <Link
                                 key={link.href}
                                 href={link.href}
-                                className={`relative flex flex-col items-center justify-center w-full h-full space-y-1 transition-colors duration-200 ${isActive ? 'text-primary' : 'text-base-content/50 hover:text-base-content/80'
+                                className={`relative flex flex-col items-center justify-center min-w-[60px] flex-shrink-0 h-full space-y-1 transition-colors duration-200 ${isActive ? 'text-primary' : 'text-base-content/50 hover:text-base-content/80'
                                     }`}
                             >
                                 <div className={`p-1.5 rounded-full transition-all duration-300 ${isActive ? 'bg-primary/10 shadow-inner' : ''}`}>
                                     <Icon className={`w-5 h-5 ${isActive ? 'stroke-[2.5px]' : 'stroke-2'}`} />
                                 </div>
-                                <span className={`text-[10px] font-medium transition-all ${isActive ? 'scale-105' : 'scale-100'}`}>
+                                <span className={`text-[9px] font-medium transition-all whitespace-nowrap ${isActive ? 'scale-105' : 'scale-100'}`}>
                                     {link.name}
                                 </span>
                                 {isActive && (

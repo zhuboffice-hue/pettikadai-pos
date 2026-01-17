@@ -13,6 +13,8 @@ import {
 } from "lucide-react";
 import BarcodeScanner from "@/components/BarcodeScanner";
 import { Receipt } from "@/components/billing/Receipt";
+import { getPrinter } from "@/lib/ThermalPrinter";
+import { useHardwareScanner } from "@/hooks/useHardwareScanner";
 
 export default function DashboardPage() {
     const { userData } = useAuth();
@@ -58,6 +60,30 @@ export default function DashboardPage() {
     // Loose Item State
     const [looseProduct, setLooseProduct] = useState<Product | null>(null);
     const [weightInput, setWeightInput] = useState("");
+
+    // Handle Barcode Scan (Camera or Hardware)
+    const handleScan = async (code: string) => {
+        if (!shopId) return;
+
+        // 1. Check Strict Match
+        let product = await db.products.where('barcode').equals(code).first();
+
+        // 2. Fallback: Check if it matches existing product name? (Maybe not for barcode)
+
+        if (product) {
+            addToCart(product);
+            // addToCart handles the toast
+        } else {
+            toast.error(`Product not found: ${code}`);
+        }
+
+        setIsScanning(false);
+    };
+
+    useHardwareScanner({
+        onScan: handleScan,
+        maxInterKeyInterval: 60 // Slightly relaxed for some scanners
+    });
 
     // ... (rest of implementation)
 
@@ -209,8 +235,44 @@ export default function DashboardPage() {
 
 
 
-    const handlePrint = () => {
-        window.print();
+    const handlePrint = async () => {
+        const printer = getPrinter();
+        if (!printer.isConnected) {
+            // Fallback to browser print if no thermal printer connected
+            toast.error("No thermal printer connected. Go to Settings to connect.");
+            window.print();
+            return;
+        }
+
+        if (!lastBill) return;
+
+        const toastId = toast.loading("Printing receipt...");
+        try {
+            await printer.printReceipt({
+                storeName: settings?.storeName || 'My Kirana Shop',
+                storeAddress: settings?.address,
+                storePhone: settings?.phone,
+                items: lastBill.items.map(item => ({
+                    name: item.name,
+                    qty: item.qty,
+                    price: item.total
+                })),
+                subtotal: lastBill.totalAmount - (isGstEnabled ? (lastBill.totalAmount * gstRate / (100 + gstRate)) : 0),
+                tax: isGstEnabled ? (lastBill.totalAmount * gstRate / (100 + gstRate)) : undefined,
+                total: lastBill.totalAmount,
+                paymentMethod: lastBill.paymentMode.toUpperCase(),
+                invoiceNo: lastBill.id.slice(0, 8).toUpperCase(),
+                date: new Date(lastBill.createdAt),
+                logoUrl: settings?.printLogo ? '/logo.png' : undefined
+            });
+            toast.dismiss(toastId);
+            toast.success("Receipt printed!");
+        } catch (error: any) {
+            toast.dismiss(toastId);
+            toast.error(error.message || "Failed to print. Check printer connection.");
+            // Fallback to browser print
+            window.print();
+        }
     };
 
     const handleCheckout = async (paymentMode: 'cash' | 'upi' | 'credit') => {
@@ -227,6 +289,11 @@ export default function DashboardPage() {
                 const costPrice = product.costPrice || 0;
                 totalProfit += (baseSellingPrice - costPrice) * item.qty;
             }
+        }
+
+        if (paymentMode === 'credit' && (!customerPhone || !customerName)) {
+            toast.error("Customer Name & Phone required for Credit");
+            return;
         }
 
         const bill: Bill = {
@@ -259,12 +326,18 @@ export default function DashboardPage() {
                 const existingCustomer = await db.customers.where({ phone: customerPhone, shopId: shopId }).first();
                 const customerId = existingCustomer ? existingCustomer.id : uuidv4();
 
+                // Calculate/Update Khata Balance
+                let newBalance = existingCustomer?.khataBalance || 0;
+                if (paymentMode === 'credit') {
+                    newBalance += payableAmount;
+                }
+
                 const customerData = {
                     id: customerId,
                     shopId: shopId,
                     name: customerName || (existingCustomer?.name || 'Unknown'),
                     phone: customerPhone,
-                    khataBalance: existingCustomer?.khataBalance || 0,
+                    khataBalance: newBalance,
                     lastVisit: Date.now(),
                     synced: false
                 };
@@ -278,6 +351,29 @@ export default function DashboardPage() {
                     timestamp: Date.now(),
                     shopId: shopId
                 });
+
+                // Create Transaction for Credit
+                if (paymentMode === 'credit') {
+                    const transaction = {
+                        id: uuidv4(),
+                        shopId: shopId,
+                        customerId: customerId,
+                        amount: payableAmount,
+                        type: 'credit' as const, // 'credit' = customer owes us
+                        referenceBillId: bill.id,
+                        date: Date.now(),
+                        synced: false
+                    };
+                    await db.khataTransactions.add(transaction);
+                    await db.syncQueue.add({
+                        collection: 'khataTransactions',
+                        docId: transaction.id,
+                        action: 'create',
+                        data: transaction,
+                        shopId: shopId,
+                        timestamp: Date.now()
+                    });
+                }
             }
 
             for (const item of cart) {
@@ -305,16 +401,45 @@ export default function DashboardPage() {
             setCustomerName("");
             setCustomerPhone("");
             setShowPaymentModal(false);
+
+            // Auto-print if enabled
+            if (settings?.autoPrint) {
+                const printer = getPrinter();
+                if (printer.isConnected) {
+                    try {
+                        await printer.printReceipt({
+                            storeName: settings?.storeName || 'My Kirana Shop',
+                            storeAddress: settings?.address,
+                            storePhone: settings?.phone,
+                            items: bill.items.map(item => ({
+                                name: item.name,
+                                qty: item.qty,
+                                price: item.total
+                            })),
+                            subtotal: bill.totalAmount - (isGstEnabled ? (bill.totalAmount * gstRate / (100 + gstRate)) : 0),
+                            tax: isGstEnabled ? (bill.totalAmount * gstRate / (100 + gstRate)) : undefined,
+                            total: bill.totalAmount,
+                            paymentMethod: paymentMode.toUpperCase(),
+                            invoiceNo: bill.id.slice(0, 8).toUpperCase(),
+                            date: new Date(bill.createdAt),
+                            logoUrl: settings?.printLogo ? '/logo.png' : undefined
+                        });
+                        toast.success("Receipt printed!");
+                    } catch (printError) {
+                        console.error('Auto-print failed:', printError);
+                    }
+                }
+            }
         } catch (error) {
             console.error(error);
             toast.error("Failed to save bill");
         }
     };
 
-    const handleScanSuccess = (code: string) => {
-        setSearchTerm(code);
-        setIsScanning(false);
-    };
+    // const handleScanSuccess = (code: string) => {
+    //     setSearchTerm(code);
+    //     setIsScanning(false);
+    // };
 
 
 
@@ -351,7 +476,7 @@ export default function DashboardPage() {
                         <dialog className="modal modal-open">
                             <div className="modal-box p-0 overflow-hidden relative">
                                 <button className="btn btn-sm btn-circle btn-ghost absolute right-2 top-2 z-10 text-white" onClick={() => setIsScanning(false)}>✕</button>
-                                <BarcodeScanner onScanSuccess={handleScanSuccess} />
+                                <BarcodeScanner onScanSuccess={handleScan} />
                             </div>
                             <form method="dialog" className="modal-backdrop">
                                 <button onClick={() => setIsScanning(false)}>close</button>

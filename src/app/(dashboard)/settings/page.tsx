@@ -6,12 +6,13 @@ import { toast } from "react-hot-toast";
 import {
     Save, Printer, Monitor, Bell, Store, FileText,
     Bluetooth, RefreshCw, Trash2, AlertTriangle,
-    CheckCircle, Info, Smartphone
+    CheckCircle, Info, Smartphone, Unplug
 } from "lucide-react";
 import { useLiveQuery } from "dexie-react-hooks";
 import { db, StoreSettings } from "@/lib/db/db";
 import { v4 as uuidv4 } from 'uuid';
 import { useSync } from "@/hooks/useSync";
+import { ThermalPrinter, getPrinter, setPrinter } from "@/lib/ThermalPrinter";
 
 export default function SettingsPage() {
     const { userData, user } = useAuth();
@@ -38,7 +39,10 @@ export default function SettingsPage() {
 
     const [formData, setFormData] = useState<StoreSettings>(defaultSettings);
     const [loading, setLoading] = useState(false);
-    const [printerDevice, setPrinterDevice] = useState<any>(null);
+    const [printer, setPrinterState] = useState<ThermalPrinter | null>(null);
+    const [printerConnected, setPrinterConnected] = useState(false);
+    const [isScanning, setIsScanning] = useState(false);
+    const [isPrinting, setIsPrinting] = useState(false);
     const [deleteConfirmation, setDeleteConfirmation] = useState("");
 
     // Fetch existing settings
@@ -62,18 +66,19 @@ export default function SettingsPage() {
         setLoading(true);
         try {
             const existing = await db.storeSettings.where('shopId').equals(userData.shopId).first();
+            const printerInfo = printer?.getDeviceInfo();
             const dataToSave = {
                 ...formData,
                 shopId: userData.shopId,
                 id: existing ? existing.id : uuidv4(),
-                printerName: printerDevice ? printerDevice.name : formData.printerName,
+                printerName: printerInfo?.name || formData.printerName,
                 synced: false
             };
 
             await db.storeSettings.put(dataToSave);
             await db.syncQueue.add({
-                collection: 'storeSettings', // Fixed collection name
-                docId: userData.shopId,      // Fixed: Use shopId as Doc ID to prevent collision
+                collection: 'storeSettings',
+                docId: userData.shopId,
                 action: 'update',
                 data: dataToSave,
                 timestamp: Date.now(),
@@ -89,39 +94,64 @@ export default function SettingsPage() {
         }
     };
 
-    // Bluetooth Logic
+    // Bluetooth Thermal Printer Logic using ThermalPrinter class
     const scanForPrinters = async () => {
-        try {
-            if (!navigator.bluetooth) {
-                toast.error("Web Bluetooth is not supported in this browser.");
-                return;
-            }
-            // Request device. Note: For thermal printers, they usually service a specific UUID.
-            // Since we don't know the specific printer, 'acceptAllDevices' is risky but useful for generic scan.
-            // Ideally we filter by services: ['000018f0-0000-1000-8000-00805f9b34fb'] (Generic Printer) usually.
-            const device = await navigator.bluetooth.requestDevice({
-                acceptAllDevices: true,
-                optionalServices: ['000018f0-0000-1000-8000-00805f9b34fb', 'battery_service'] // Common services
-            });
+        if (!navigator.bluetooth) {
+            toast.error("Web Bluetooth is not supported in this browser.");
+            return;
+        }
 
-            setPrinterDevice(device);
-            setFormData(prev => ({ ...prev, printerName: device.name || 'Unknown Printer' }));
-            toast.success(`Connected to ${device.name}`);
-        } catch (error) {
-            console.error(error);
-            // Ignore cancellation
+        setIsScanning(true);
+        try {
+            const newPrinter = new ThermalPrinter();
+            const device = await newPrinter.scanForPrinters();
+            await newPrinter.connect();
+
+            setPrinterState(newPrinter);
+            setPrinter(newPrinter); // Set global printer
+            setPrinterConnected(true);
+            setFormData(prev => ({ ...prev, printerName: device.name || 'Thermal Printer' }));
+            toast.success(`Connected to ${device.name || 'Thermal Printer'}`);
+        } catch (error: any) {
+            console.error('Printer connection error:', error);
+            if (error.message !== 'User cancelled the requestDevice() chooser.') {
+                toast.error(error.message || "Failed to connect to printer");
+            }
+        } finally {
+            setIsScanning(false);
+        }
+    };
+
+    const disconnectPrinter = async () => {
+        if (printer) {
+            await printer.disconnect();
+            setPrinterState(null);
+            setPrinterConnected(false);
+            toast.success("Printer disconnected");
         }
     };
 
     const testPrint = async () => {
-        if (!printerDevice) {
-            toast.error("No printer connected.");
+        if (!printer || !printer.isConnected) {
+            toast.error("No printer connected. Please scan for printers first.");
             return;
         }
-        toast.loading("Sending test print...");
-        // This is a mock since actual printing requires complex GATT ops
-        setTimeout(() => toast.dismiss(), 1000);
-        setTimeout(() => toast.success("Test print sent!"), 1100);
+
+        setIsPrinting(true);
+        const toastId = toast.loading("Sending test print...");
+
+        try {
+            await printer.printTestPage(formData.storeName || 'My Kirana Shop');
+            toast.dismiss(toastId);
+            toast.success("Test print sent successfully!");
+        } catch (error: any) {
+            console.error("Print error:", error);
+            toast.dismiss(toastId);
+            toast.error(error.message || "Failed to print. Please reconnect the printer.");
+            setPrinterConnected(false);
+        } finally {
+            setIsPrinting(false);
+        }
     };
 
     const handleDeleteAllData = async () => {
@@ -156,21 +186,21 @@ export default function SettingsPage() {
                     <div className="card bg-base-100 shadow border border-base-200">
                         <div className="card-body">
                             <h3 className="card-title text-primary flex items-center gap-2">
-                                <Bluetooth className="w-5 h-5" /> Bluetooth Printer
+                                <Bluetooth className="w-5 h-5" /> Bluetooth Printer (55mm)
                             </h3>
 
                             {/* Status Banner */}
-                            <div className={`alert ${printerDevice || formData.printerName ? 'alert-success' : 'bg-base-200'}`}>
-                                {printerDevice || formData.printerName ? (
+                            <div className={`alert ${printerConnected || formData.printerName ? 'alert-success' : 'bg-base-200'}`}>
+                                {printerConnected || formData.printerName ? (
                                     <CheckCircle className="w-5 h-5" />
                                 ) : (
                                     <Info className="w-5 h-5" />
                                 )}
                                 <div>
-                                    <h3 className="font-bold">{printerDevice || formData.printerName ? 'Printer Connected' : 'No Printer Configured'}</h3>
+                                    <h3 className="font-bold">{printerConnected ? 'Printer Connected' : formData.printerName ? 'Saved Printer' : 'No Printer Configured'}</h3>
                                     <div className="text-xs">
-                                        {printerDevice || formData.printerName
-                                            ? `Connected to: ${printerDevice?.name || formData.printerName}`
+                                        {printerConnected || formData.printerName
+                                            ? `${printerConnected ? 'Connected to' : 'Last used'}: ${printer?.getDeviceInfo().name || formData.printerName}`
                                             : 'Click "Scan for Printers" to connect.'}
                                     </div>
                                 </div>
@@ -188,13 +218,31 @@ export default function SettingsPage() {
                             </div>
 
                             {/* Buttons */}
-                            <div className="flex gap-4 mt-6">
-                                <button className="btn btn-primary flex-1 gap-2" onClick={scanForPrinters}>
-                                    <Bluetooth className="w-4 h-4" /> Scan for Printers
+                            <div className="flex flex-wrap gap-3 mt-6">
+                                <button
+                                    className={`btn btn-primary flex-1 gap-2 ${isScanning ? 'loading' : ''}`}
+                                    onClick={scanForPrinters}
+                                    disabled={isScanning}
+                                >
+                                    {!isScanning && <Bluetooth className="w-4 h-4" />}
+                                    {isScanning ? 'Scanning...' : 'Scan for Printers'}
                                 </button>
-                                <button className="btn btn-secondary flex-1 gap-2" onClick={testPrint} disabled={!printerDevice && !formData.printerName}>
-                                    <Printer className="w-4 h-4" /> Test Print
+                                <button
+                                    className={`btn btn-secondary flex-1 gap-2 ${isPrinting ? 'loading' : ''}`}
+                                    onClick={testPrint}
+                                    disabled={!printerConnected || isPrinting}
+                                >
+                                    {!isPrinting && <Printer className="w-4 h-4" />}
+                                    {isPrinting ? 'Printing...' : 'Test Print'}
                                 </button>
+                                {printerConnected && (
+                                    <button
+                                        className="btn btn-outline btn-error gap-2"
+                                        onClick={disconnectPrinter}
+                                    >
+                                        <Unplug className="w-4 h-4" /> Disconnect
+                                    </button>
+                                )}
                             </div>
                         </div>
                     </div>

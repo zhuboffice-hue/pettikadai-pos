@@ -15,6 +15,11 @@ const geistMono = Geist_Mono({
 export const metadata: Metadata = {
   title: "Pettikadai POS",
   description: "Advanced Point of Sale System for Kirana Shops",
+  icons: {
+    icon: "/logo.png",
+    shortcut: "/logo.png",
+    apple: "/logo.png",
+  },
 };
 
 import { AuthProvider } from "@/components/providers/AuthProvider";

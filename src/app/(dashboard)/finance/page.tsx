@@ -60,12 +60,38 @@ export default function ShopAdminDashboard() {
     }, [shopId]);
 
     // 2. Calculations
-    const totalRevenue = bills?.reduce((acc, bill) => acc + bill.totalAmount, 0) || 0;
-    const totalBills = bills?.length || 0;
+    // Only count COMPLETED bills
+    const validBills = bills?.filter(b => b.status === 'completed') || [];
+
+    const totalRevenue = validBills.reduce((acc, bill) => acc + bill.totalAmount, 0);
+    const totalBills = validBills.length;
 
     // Expenses
     const totalExpenses = expenses?.reduce((acc, exp) => acc + exp.amount, 0) || 0;
-    const grossProfit = bills?.reduce((acc, bill) => acc + (bill.profit || 0), 0) || 0;
+
+    // Recalculate Gross Profit based on CURRENT Product Costs (snapshot fix)
+    const grossProfit = validBills.reduce((acc, bill) => {
+        let billProfit = 0;
+        bill.items.forEach(item => {
+            const product = products?.find(p => p.id === item.productId);
+            // If product exists, use its CURRENT cost price. If not, fallback to item-level profit if stored, or 0.
+            if (product && product.costPrice) {
+                // Calculate item profit: (Selling Price - Cost Price) * Qty
+                // Note: item.price is the unit selling price
+                const profitPerItem = (item.price - product.costPrice);
+                billProfit += profitPerItem * item.qty;
+            } else {
+                // Fallback if we can't find cost (e.g. deleted product)
+                // Assume 20% margin if no data?? No, safer to assume 0 or use bill.profit if available.
+                // Let's use stored bill profit if available, else 0.
+                // But wait, old bills have 0 profit. 
+                // If cost is missing, we can't calculate profit. 
+                billProfit += 0;
+            }
+        });
+        return acc + billProfit;
+    }, 0);
+
     const netProfit = grossProfit - totalExpenses;
 
     // 3. Logic
@@ -80,7 +106,7 @@ export default function ShopAdminDashboard() {
         }) || [];
 
     const topCustomers = (customers || []).map(c => {
-        const customerBills = bills?.filter(b => b.customerPhone === c.phone) || [];
+        const customerBills = validBills.filter(b => b.customerPhone === c.phone);
         const totalSpent = customerBills.reduce((acc, b) => acc + b.totalAmount, 0);
         return { ...c, totalSpent, count: customerBills.length };
     }).sort((a, b) => b.totalSpent - a.totalSpent).slice(0, 3);
@@ -124,6 +150,50 @@ export default function ShopAdminDashboard() {
             });
             toast.success("Deleted");
         } catch (e) { toast.error("Failed"); }
+    };
+
+    const handleRestock = async (item: any) => {
+        if (!shopId) return;
+        const qtyStr = prompt(`Enter quantity to ADD to ${item.name}:`);
+        if (!qtyStr) return;
+
+        const qtyToAdd = parseFloat(qtyStr);
+        if (isNaN(qtyToAdd) || qtyToAdd <= 0) {
+            toast.error("Invalid quantity");
+            return;
+        }
+
+        try {
+            const newStock = (item.currentStock || 0) + qtyToAdd;
+
+            // Update Local
+            await db.inventory.where('productId').equals(item.productId).modify({
+                currentStock: newStock,
+                lastUpdated: Date.now(),
+                synced: false
+            });
+
+            // Queue Sync with Critical Fields
+            await db.syncQueue.add({
+                collection: 'inventory',
+                docId: item.productId,
+                action: 'update',
+                data: {
+                    productId: item.productId,
+                    shopId: shopId,
+                    currentStock: newStock,
+                    lowStockThreshold: item.lowStockThreshold || 5,
+                    lastUpdated: Date.now()
+                },
+                timestamp: Date.now(),
+                shopId: shopId
+            });
+
+            toast.success("Stock Updated!");
+        } catch (error) {
+            console.error(error);
+            toast.error("Failed to restock");
+        }
     };
 
     // Staff Logic
@@ -279,7 +349,7 @@ export default function ShopAdminDashboard() {
                                                 <tr key={i}>
                                                     <td className="font-medium">{item.name}</td>
                                                     <td className="text-error font-bold">{item.currentStock} {item.unit}</td>
-                                                    <td><button className="btn btn-xs btn-outline btn-error">Restock</button></td>
+                                                    <td><button className="btn btn-xs btn-outline btn-error" onClick={() => handleRestock(item)}>Restock</button></td>
                                                 </tr>
                                             ))}
                                         </tbody>
@@ -293,7 +363,7 @@ export default function ShopAdminDashboard() {
                     <div className="card bg-base-100 shadow-xl border border-base-200">
                         <div className="card-body p-0">
                             <div className="p-4 border-b border-base-200 flex justify-between items-center">
-                                <h2 className="card-title text-lg">Daily Expenses</h2>
+                                <h2 className="card-title text-lg">Recent Expenses</h2>
                                 <button className="btn btn-sm btn-ghost gap-2" onClick={() => setIsExpenseModalOpen(true)}>
                                     <Plus className="w-4 h-4" /> Add New
                                 </button>
@@ -367,162 +437,175 @@ export default function ShopAdminDashboard() {
                                 <div className="text-sm">Stock Value</div>
                                 <div className="font-bold">₹{stockValue.toLocaleString()}</div>
                             </div>
+
+                            <div className="divider my-2"></div>
+
+                            <div className="flex justify-between items-center">
+                                <div className="text-sm">Total Expenses</div>
+                                <div className="font-bold text-error">-₹{totalExpenses.toLocaleString()}</div>
+                            </div>
                         </div>
                     </div>
                 </div>
             </div>
 
+
+
             {/* Add Expense Modal */}
-            {isExpenseModalOpen && (
-                <dialog className="modal modal-open">
-                    <div className="modal-box p-6 rounded-2xl">
-                        <button className="btn btn-sm btn-circle btn-ghost absolute right-2 top-2" onClick={() => setIsExpenseModalOpen(false)}>✕</button>
-                        <h3 className="font-bold text-xl mb-4">Add New Expense</h3>
-                        <div className="space-y-4">
-                            <div className="form-control">
-                                <label className="label font-medium opacity-70">Title</label>
-                                <input
-                                    type="text"
-                                    placeholder="e.g. Shop Rent"
-                                    className="input input-bordered w-full"
-                                    value={expenseForm.title}
-                                    onChange={e => setExpenseForm({ ...expenseForm, title: e.target.value })}
-                                />
-                            </div>
-                            <div className="grid grid-cols-2 gap-4">
+            {
+                isExpenseModalOpen && (
+                    <dialog className="modal modal-open">
+                        <div className="modal-box p-6 rounded-2xl">
+                            <button className="btn btn-sm btn-circle btn-ghost absolute right-2 top-2" onClick={() => setIsExpenseModalOpen(false)}>✕</button>
+                            <h3 className="font-bold text-xl mb-4">Add New Expense</h3>
+                            <div className="space-y-4">
                                 <div className="form-control">
-                                    <label className="label font-medium opacity-70">Amount (₹)</label>
+                                    <label className="label font-medium opacity-70">Title</label>
                                     <input
-                                        type="number"
-                                        placeholder="0.00"
+                                        type="text"
+                                        placeholder="e.g. Shop Rent"
                                         className="input input-bordered w-full"
-                                        value={expenseForm.amount}
-                                        onChange={e => setExpenseForm({ ...expenseForm, amount: e.target.value })}
+                                        value={expenseForm.title}
+                                        onChange={e => setExpenseForm({ ...expenseForm, title: e.target.value })}
                                     />
                                 </div>
-                                <div className="form-control">
-                                    <label className="label font-medium opacity-70">Category</label>
-                                    <select
-                                        className="select select-bordered w-full"
-                                        value={expenseForm.category}
-                                        onChange={e => setExpenseForm({ ...expenseForm, category: e.target.value })}
-                                    >
-                                        <option>Rent</option>
-                                        <option>Salaries</option>
-                                        <option>Utilities</option>
-                                        <option>Other</option>
-                                    </select>
+                                <div className="grid grid-cols-2 gap-4">
+                                    <div className="form-control">
+                                        <label className="label font-medium opacity-70">Amount (₹)</label>
+                                        <input
+                                            type="number"
+                                            placeholder="0.00"
+                                            className="input input-bordered w-full"
+                                            value={expenseForm.amount}
+                                            onChange={e => setExpenseForm({ ...expenseForm, amount: e.target.value })}
+                                        />
+                                    </div>
+                                    <div className="form-control">
+                                        <label className="label font-medium opacity-70">Category</label>
+                                        <select
+                                            className="select select-bordered w-full"
+                                            value={expenseForm.category}
+                                            onChange={e => setExpenseForm({ ...expenseForm, category: e.target.value })}
+                                        >
+                                            <option>Rent</option>
+                                            <option>Salaries</option>
+                                            <option>Utilities</option>
+                                            <option>Other</option>
+                                        </select>
+                                    </div>
                                 </div>
                             </div>
+                            <div className="modal-action mt-8">
+                                <button className="btn btn-ghost" onClick={() => setIsExpenseModalOpen(false)}>Cancel</button>
+                                <button className="btn btn-primary px-8" onClick={handleAddExpense}>Save Expense</button>
+                            </div>
                         </div>
-                        <div className="modal-action mt-8">
-                            <button className="btn btn-ghost" onClick={() => setIsExpenseModalOpen(false)}>Cancel</button>
-                            <button className="btn btn-primary px-8" onClick={handleAddExpense}>Save Expense</button>
-                        </div>
-                    </div>
-                </dialog>
-            )}
+                    </dialog>
+                )
+            }
 
             {/* Staff Modal */}
-            {isStaffModalOpen && (
-                <dialog className="modal modal-open">
-                    <div className="modal-box w-11/12 max-w-3xl rounded-2xl p-6">
-                        <button className="btn btn-sm btn-circle btn-ghost absolute right-2 top-2" onClick={() => setIsStaffModalOpen(false)}>✕</button>
-                        <h3 className="font-bold text-2xl mb-1 flex items-center gap-2">
-                            <Users className="w-6 h-6 text-primary" /> Staff Management
-                        </h3>
-                        <p className="text-base-content/60 text-sm mb-6">Manage access to your shop dashboard</p>
+            {
+                isStaffModalOpen && (
+                    <dialog className="modal modal-open">
+                        <div className="modal-box w-11/12 max-w-3xl rounded-2xl p-6">
+                            <button className="btn btn-sm btn-circle btn-ghost absolute right-2 top-2" onClick={() => setIsStaffModalOpen(false)}>✕</button>
+                            <h3 className="font-bold text-2xl mb-1 flex items-center gap-2">
+                                <Users className="w-6 h-6 text-primary" /> Staff Management
+                            </h3>
+                            <p className="text-base-content/60 text-sm mb-6">Manage access to your shop dashboard</p>
 
-                        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-                            <div className="md:col-span-1 bg-base-50 p-4 rounded-xl h-fit">
-                                <h4 className="font-bold mb-4 text-sm uppercase opacity-50">Invite New User</h4>
-                                <div className="space-y-3">
-                                    <input
-                                        className="input input-bordered w-full input-sm"
-                                        placeholder="Name"
-                                        value={inviteForm.name}
-                                        onChange={e => setInviteForm({ ...inviteForm, name: e.target.value })}
-                                    />
-                                    <input
-                                        className="input input-bordered w-full input-sm"
-                                        placeholder="Email Address"
-                                        type="email"
-                                        value={inviteForm.email}
-                                        onChange={e => setInviteForm({ ...inviteForm, email: e.target.value })}
-                                    />
-                                    <select
-                                        className="select select-bordered w-full select-sm"
-                                        value={inviteForm.role}
-                                        onChange={e => setInviteForm({ ...inviteForm, role: e.target.value })}
-                                    >
-                                        <option value="shop-user">Shop Staff (POS Only)</option>
-                                        <option value="shop-admin">Manager (Full Access)</option>
-                                    </select>
-                                    <button
-                                        className="btn btn-primary w-full btn-sm"
-                                        onClick={handleInviteUser}
-                                    >
-                                        Send Invite
-                                    </button>
+                            <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                                <div className="md:col-span-1 bg-base-50 p-4 rounded-xl h-fit">
+                                    <h4 className="font-bold mb-4 text-sm uppercase opacity-50">Invite New User</h4>
+                                    <div className="space-y-3">
+                                        <input
+                                            className="input input-bordered w-full input-sm"
+                                            placeholder="Name"
+                                            value={inviteForm.name}
+                                            onChange={e => setInviteForm({ ...inviteForm, name: e.target.value })}
+                                        />
+                                        <input
+                                            className="input input-bordered w-full input-sm"
+                                            placeholder="Email Address"
+                                            type="email"
+                                            value={inviteForm.email}
+                                            onChange={e => setInviteForm({ ...inviteForm, email: e.target.value })}
+                                        />
+                                        <select
+                                            className="select select-bordered w-full select-sm"
+                                            value={inviteForm.role}
+                                            onChange={e => setInviteForm({ ...inviteForm, role: e.target.value })}
+                                        >
+                                            <option value="shop-user">Shop Staff (POS Only)</option>
+                                            <option value="shop-admin">Manager (Full Access)</option>
+                                        </select>
+                                        <button
+                                            className="btn btn-primary w-full btn-sm"
+                                            onClick={handleInviteUser}
+                                        >
+                                            Send Invite
+                                        </button>
+                                    </div>
+                                </div>
+
+                                <div className="md:col-span-2">
+                                    <h4 className="font-bold mb-4 text-sm uppercase opacity-50">Current Staff & Invites</h4>
+                                    {isLoadingStaff ? (
+                                        <div className="flex justify-center py-8"><span className="loading loading-spinner"></span></div>
+                                    ) : (
+                                        <div className="overflow-x-auto border border-base-200 rounded-lg">
+                                            <table className="table table-sm">
+                                                <thead className="bg-base-100">
+                                                    <tr>
+                                                        <th>Name/Email</th>
+                                                        <th>Role</th>
+                                                        <th>Status</th>
+                                                        <th>Action</th>
+                                                    </tr>
+                                                </thead>
+                                                <tbody>
+                                                    {staffList.length === 0 ? (
+                                                        <tr><td colSpan={4} className="text-center opacity-50 py-4">No staff found</td></tr>
+                                                    ) : (
+                                                        staffList.map((staff, idx) => (
+                                                            <tr key={idx} className="hover:bg-base-50">
+                                                                <td>
+                                                                    <div className="font-bold text-xs">{staff.name}</div>
+                                                                    <div className="text-[10px] opacity-50">{staff.email}</div>
+                                                                </td>
+                                                                <td>
+                                                                    <span className="badge badge-xs badge-ghost">{staff.role}</span>
+                                                                </td>
+                                                                <td>
+                                                                    {staff.type === 'invite' ? (
+                                                                        <span className="badge badge-xs badge-warning badge-outline">Pending</span>
+                                                                    ) : (
+                                                                        <span className="badge badge-xs badge-success badge-outline">Active</span>
+                                                                    )}
+                                                                </td>
+                                                                <td>
+                                                                    <button
+                                                                        className="btn btn-xs btn-square btn-ghost text-error"
+                                                                        title="Remove Access"
+                                                                        onClick={() => handleRemoveAccess(staff)}
+                                                                    >
+                                                                        <Trash2 className="w-3 h-3" />
+                                                                    </button>
+                                                                </td>
+                                                            </tr>
+                                                        ))
+                                                    )}
+                                                </tbody>
+                                            </table>
+                                        </div>
+                                    )}
                                 </div>
                             </div>
-
-                            <div className="md:col-span-2">
-                                <h4 className="font-bold mb-4 text-sm uppercase opacity-50">Current Staff & Invites</h4>
-                                {isLoadingStaff ? (
-                                    <div className="flex justify-center py-8"><span className="loading loading-spinner"></span></div>
-                                ) : (
-                                    <div className="overflow-x-auto border border-base-200 rounded-lg">
-                                        <table className="table table-sm">
-                                            <thead className="bg-base-100">
-                                                <tr>
-                                                    <th>Name/Email</th>
-                                                    <th>Role</th>
-                                                    <th>Status</th>
-                                                    <th>Action</th>
-                                                </tr>
-                                            </thead>
-                                            <tbody>
-                                                {staffList.length === 0 ? (
-                                                    <tr><td colSpan={4} className="text-center opacity-50 py-4">No staff found</td></tr>
-                                                ) : (
-                                                    staffList.map((staff, idx) => (
-                                                        <tr key={idx} className="hover:bg-base-50">
-                                                            <td>
-                                                                <div className="font-bold text-xs">{staff.name}</div>
-                                                                <div className="text-[10px] opacity-50">{staff.email}</div>
-                                                            </td>
-                                                            <td>
-                                                                <span className="badge badge-xs badge-ghost">{staff.role}</span>
-                                                            </td>
-                                                            <td>
-                                                                {staff.type === 'invite' ? (
-                                                                    <span className="badge badge-xs badge-warning badge-outline">Pending</span>
-                                                                ) : (
-                                                                    <span className="badge badge-xs badge-success badge-outline">Active</span>
-                                                                )}
-                                                            </td>
-                                                            <td>
-                                                                <button
-                                                                    className="btn btn-xs btn-square btn-ghost text-error"
-                                                                    title="Remove Access"
-                                                                    onClick={() => handleRemoveAccess(staff)}
-                                                                >
-                                                                    <Trash2 className="w-3 h-3" />
-                                                                </button>
-                                                            </td>
-                                                        </tr>
-                                                    ))
-                                                )}
-                                            </tbody>
-                                        </table>
-                                    </div>
-                                )}
-                            </div>
                         </div>
-                    </div>
-                </dialog>
-            )}
-        </div>
+                    </dialog>
+                )
+            }
+        </div >
     );
 }

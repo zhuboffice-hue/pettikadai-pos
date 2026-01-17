@@ -9,6 +9,7 @@ import { toast } from "react-hot-toast";
 import { v4 as uuidv4 } from 'uuid';
 import { useAuth } from "@/components/providers/AuthProvider";
 import GlobalCatalog, { CatalogItem } from "@/components/inventory/GlobalCatalog";
+import { useHardwareScanner } from "@/hooks/useHardwareScanner";
 
 export default function InventoryPage() {
     const { userData } = useAuth();
@@ -35,8 +36,35 @@ export default function InventoryPage() {
         barcode: "",
         isLoose: false,
         unit: "pcs",
-        initialStock: ""
+        initialStock: "",
+        currentStock: "" // Added for editing stock
     });
+
+    // Hardware Scanner: Context Aware
+    useHardwareScanner({
+        onScan: (code) => {
+            if (isModalOpen) {
+                // If editing/adding, assign to form
+                setFormData(prev => ({ ...prev, barcode: code }));
+                toast.success(`Barcode set: ${code}`);
+                if (isScanning) setIsScanning(false);
+            } else {
+                // If browsing, search
+                setSearchTerm(code);
+                toast.success(`Search: ${code}`);
+            }
+        }
+    });
+
+    // Fetch inventory for current stock
+    const inventoryMap = useLiveQuery(async () => {
+        if (!shopId) return {};
+        const items = await db.inventory.where('shopId').equals(shopId).toArray();
+        return items.reduce((acc, item) => {
+            acc[item.productId] = item.currentStock;
+            return acc;
+        }, {} as Record<string, number>);
+    }, [shopId]);
 
     // Helper to get set of existing names for Catalog check
     const existingProductNames = new Set(products?.map(p => p.name.toLowerCase()) || []);
@@ -68,7 +96,35 @@ export default function InventoryPage() {
             // 1. Save to Local DB (Dexie)
             if (editingProduct) {
                 await db.products.put(productData);
-                await db.inventory.where('productId').equals(editingProduct.id).modify({ lastUpdated: Date.now(), synced: false });
+
+                // Update inventory stock if changed
+                // Update inventory stock if changed
+                if (formData.currentStock !== '') {
+                    const newStock = parseFloat(formData.currentStock);
+                    const existingInventory = await db.inventory.where('productId').equals(editingProduct.id).first();
+
+                    const inventoryData = {
+                        productId: editingProduct.id,
+                        shopId: shopId,
+                        currentStock: newStock,
+                        lowStockThreshold: existingInventory?.lowStockThreshold || 5,
+                        lastUpdated: Date.now(),
+                        synced: false
+                    };
+
+                    // Use put() to handle both create and update
+                    await db.inventory.put(inventoryData);
+
+                    // Include full data for Firebase sync
+                    await db.syncQueue.add({
+                        collection: 'inventory',
+                        docId: editingProduct.id,
+                        action: 'update',
+                        data: inventoryData,
+                        timestamp: Date.now(),
+                        shopId: shopId
+                    });
+                }
 
                 // Add to Sync Queue
                 await db.syncQueue.add({
@@ -144,6 +200,7 @@ export default function InventoryPage() {
         setIsScanning(false);
         if (product) {
             setEditingProduct(product);
+            const currentStock = inventoryMap?.[product.id] ?? 0;
             setFormData({
                 name: product.name,
                 price: product.price.toString(),
@@ -152,7 +209,8 @@ export default function InventoryPage() {
                 barcode: product.barcode || "",
                 isLoose: product.isLoose,
                 unit: product.unit || "pcs",
-                initialStock: "" // Don't show current stock in edit
+                initialStock: "",
+                currentStock: currentStock.toString()
             });
         } else if (catalogItem) {
             setEditingProduct(null);
@@ -164,7 +222,8 @@ export default function InventoryPage() {
                 barcode: "",
                 isLoose: false,
                 unit: "pcs",
-                initialStock: "0"
+                initialStock: "0",
+                currentStock: ""
             });
         } else {
             setEditingProduct(null);
@@ -176,7 +235,8 @@ export default function InventoryPage() {
                 barcode: "",
                 isLoose: false,
                 unit: "pcs",
-                initialStock: ""
+                initialStock: "",
+                currentStock: ""
             });
         }
         setIsModalOpen(true);
@@ -247,31 +307,47 @@ export default function InventoryPage() {
                                 <button className="btn btn-sm btn-link mt-2" onClick={() => setActiveTab('catalog')}>Go to Catalog</button>
                             </div>
                         )}
-                        {filteredProducts?.map((product) => (
-                            <div key={product.id} className="card bg-base-100 shadow-sm border border-base-200 hover:border-primary/50 transition-colors group">
-                                <div className="card-body p-4">
-                                    <div className="flex justify-between items-start">
-                                        <div>
-                                            <h3 className="font-bold text-lg">{product.name}</h3>
-                                            <p className="text-sm opacity-70">{product.category}</p>
-                                            {product.isLoose && <div className="badge badge-sm badge-outline mt-1 font-mono text-[10px] uppercase">Loose</div>}
+                        {filteredProducts?.map((product) => {
+                            const stock = inventoryMap?.[product.id] ?? 0;
+                            const lowStock = stock < 5;
+                            return (
+                                <div key={product.id} className={`card bg-base-100 shadow-sm border transition-colors group ${lowStock ? 'border-warning/50 bg-warning/5' : 'border-base-200 hover:border-primary/50'}`}>
+                                    <div className="card-body p-4">
+                                        <div className="flex justify-between items-start">
+                                            <div>
+                                                <h3 className="font-bold text-lg">{product.name}</h3>
+                                                <p className="text-sm opacity-70">{product.category}</p>
+                                                {product.isLoose && <div className="badge badge-sm badge-outline mt-1 font-mono text-[10px] uppercase">Loose</div>}
+                                            </div>
+                                            <div className="text-right">
+                                                <div className="font-bold text-xl">₹{product.price}</div>
+                                                <div className="text-xs opacity-50">/{product.unit}</div>
+                                            </div>
                                         </div>
-                                        <div className="text-right">
-                                            <div className="font-bold text-xl">₹{product.price}</div>
-                                            <div className="text-xs opacity-50">/{product.unit}</div>
+
+                                        {/* Stock Display */}
+                                        <div className={`mt-3 p-2 rounded-lg flex items-center justify-between ${lowStock ? 'bg-warning/20' : 'bg-base-200/50'}`}>
+                                            <span className="text-sm font-medium">Stock:</span>
+                                            <div className="flex items-center gap-2">
+                                                <span className={`font-bold text-lg ${lowStock ? 'text-warning' : 'text-success'}`}>
+                                                    {stock} {product.unit}
+                                                </span>
+                                                {lowStock && <span className="badge badge-warning badge-sm">Low</span>}
+                                            </div>
                                         </div>
-                                    </div>
-                                    <div className="card-actions justify-end mt-4 pt-4 border-t border-base-200 opacity-0 group-hover:opacity-100 transition-opacity">
-                                        <button onClick={() => openModal(product)} className="btn btn-sm btn-ghost text-primary tooltip" data-tip="Edit">
-                                            <Edit className="w-4 h-4" />
-                                        </button>
-                                        <button onClick={() => handleDelete(product.id)} className="btn btn-sm btn-ghost text-error tooltip" data-tip="Delete">
-                                            <Trash2 className="w-4 h-4" />
-                                        </button>
+
+                                        <div className="card-actions justify-end mt-3 pt-3 border-t border-base-200">
+                                            <button onClick={() => openModal(product)} className="btn btn-sm btn-ghost text-primary tooltip" data-tip="Edit">
+                                                <Edit className="w-4 h-4" />
+                                            </button>
+                                            <button onClick={() => handleDelete(product.id)} className="btn btn-sm btn-ghost text-error tooltip" data-tip="Delete">
+                                                <Trash2 className="w-4 h-4" />
+                                            </button>
+                                        </div>
                                     </div>
                                 </div>
-                            </div>
-                        ))}
+                            );
+                        })}
                     </div>
                 </>
             ) : (
@@ -392,7 +468,26 @@ export default function InventoryPage() {
                                     </div>
                                 </div>
 
-                                {!editingProduct && (
+                                {/* Stock Field - Different for Add vs Edit */}
+                                {editingProduct ? (
+                                    <div className="form-control w-full bg-success/10 p-4 rounded-xl border border-success/30">
+                                        <label className="label pt-0 pb-1">
+                                            <span className="label-text font-bold text-success">Update Current Stock</span>
+                                        </label>
+                                        <div className="join w-full">
+                                            <input
+                                                type="number"
+                                                step="0.01"
+                                                placeholder="0"
+                                                className="input input-bordered w-full join-item font-bold"
+                                                value={formData.currentStock}
+                                                onChange={e => setFormData({ ...formData, currentStock: e.target.value })}
+                                            />
+                                            <div className="btn btn-disabled join-item text-base-content/70 border-base-300 bg-base-200">{formData.unit}</div>
+                                        </div>
+                                        <p className="text-xs text-success/70 mt-2">Modify the current stock level for this product</p>
+                                    </div>
+                                ) : (
                                     <div className="form-control w-full bg-base-200/30 p-4 rounded-xl border border-base-200">
                                         <label className="label pt-0 pb-1">
                                             <span className="label-text font-bold">Initial Stock <span className="text-error">*</span></span>

@@ -4,9 +4,11 @@ import { useAuth } from "@/components/providers/AuthProvider";
 import { db, Bill, StoreSettings } from "@/lib/db/db";
 import { useLiveQuery } from "dexie-react-hooks";
 import { useState, useRef } from "react";
-import { Search, Printer, Calendar, IndianRupee, ShoppingBag, Eye, ArrowUpRight } from "lucide-react";
+import { Search, Printer, Calendar, IndianRupee, ShoppingBag, Eye, ArrowUpRight, Loader2 } from "lucide-react";
 import { format } from "date-fns";
 import { Receipt } from "@/components/billing/Receipt";
+import { getPrinter } from "@/lib/ThermalPrinter";
+import { toast } from "react-hot-toast";
 
 export default function OrdersPage() {
     const { userData } = useAuth();
@@ -15,6 +17,7 @@ export default function OrdersPage() {
     const [searchTerm, setSearchTerm] = useState("");
     const [selectedDate, setSelectedDate] = useState(format(new Date(), 'yyyy-MM-dd'));
     const [selectedBill, setSelectedBill] = useState<Bill | null>(null);
+    const [printingBillId, setPrintingBillId] = useState<string | null>(null);
 
     // Fetch Bills
     const bills = useLiveQuery(async () => {
@@ -44,10 +47,52 @@ export default function OrdersPage() {
         return matchesSearch;
     });
 
-    const handlePrint = (bill: Bill) => {
-        setSelectedBill(bill);
-        // Wait for state update then print
-        setTimeout(() => window.print(), 100);
+    const handlePrint = async (bill: Bill) => {
+        const printer = getPrinter();
+
+        if (!printer.isConnected) {
+            // Fallback to browser print
+            setSelectedBill(bill);
+            toast.error("No thermal printer. Using browser print.");
+            setTimeout(() => window.print(), 100);
+            return;
+        }
+
+        setPrintingBillId(bill.id);
+        const toastId = toast.loading("Printing receipt...");
+
+        try {
+            const gstRate = settings?.gstRate || 0;
+            const isGstEnabled = settings?.gstEnabled;
+
+            await printer.printReceipt({
+                storeName: settings?.storeName || 'My Kirana Shop',
+                storeAddress: settings?.address,
+                storePhone: settings?.phone,
+                items: bill.items.map(item => ({
+                    name: item.name,
+                    qty: item.qty,
+                    price: item.total
+                })),
+                subtotal: bill.totalAmount - (isGstEnabled ? (bill.totalAmount * gstRate / (100 + gstRate)) : 0),
+                tax: isGstEnabled ? (bill.totalAmount * gstRate / (100 + gstRate)) : undefined,
+                total: bill.totalAmount,
+                paymentMethod: bill.paymentMode.toUpperCase(),
+                invoiceNo: bill.id.slice(0, 8).toUpperCase(),
+                date: new Date(bill.createdAt)
+            });
+
+            toast.dismiss(toastId);
+            toast.success("Receipt printed!");
+        } catch (error: any) {
+            toast.dismiss(toastId);
+            toast.error(error.message || "Print failed");
+            // Fallback to browser print
+            setSelectedBill(bill);
+            setTimeout(() => window.print(), 100);
+        } finally {
+            setPrintingBillId(null);
+        }
     };
 
     return (
@@ -156,11 +201,16 @@ export default function OrdersPage() {
                                             </td>
                                             <td className="text-center">
                                                 <button
-                                                    className="btn btn-sm btn-ghost btn-square tooltip tooltip-left"
+                                                    className={`btn btn-sm btn-ghost btn-square tooltip tooltip-left ${printingBillId === bill.id ? 'loading' : ''}`}
                                                     data-tip="Reprint Receipt"
                                                     onClick={() => handlePrint(bill)}
+                                                    disabled={printingBillId !== null}
                                                 >
-                                                    <Printer className="w-4 h-4 text-base-content/70" />
+                                                    {printingBillId === bill.id ? (
+                                                        <Loader2 className="w-4 h-4 animate-spin" />
+                                                    ) : (
+                                                        <Printer className="w-4 h-4 text-base-content/70" />
+                                                    )}
                                                 </button>
                                             </td>
                                         </tr>
