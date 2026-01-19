@@ -48,7 +48,7 @@ export default function BarcodeScanner({ onScanSuccess, onScanFailure }: Barcode
                     videoRef.current!,
                     (result, error) => {
                         if (result && !isDecodedRef.current) {
-                            handleSuccess(result.text, "Barcode");
+                            handleSuccess(result.getText(), "Barcode");
                         }
                     }
                 );
@@ -166,7 +166,7 @@ export default function BarcodeScanner({ onScanSuccess, onScanFailure }: Barcode
             try {
                 // Try Barcode
                 const result = await readerRef.current!.decodeFromImageUrl(imgUrl);
-                handleSuccess(result.text, "Barcode");
+                handleSuccess(result.getText(), "Barcode");
             } catch (err) {
                 // Try OCR
                 await captureAndOCR(img);
