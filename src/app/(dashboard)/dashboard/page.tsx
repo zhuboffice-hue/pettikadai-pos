@@ -239,8 +239,8 @@ export default function DashboardPage() {
         const printer = getPrinter();
         if (!printer.isConnected) {
             // Fallback to browser print if no thermal printer connected
-            toast.error("No thermal printer connected. Go to Settings to connect.");
-            window.print();
+            toast.error("No thermal printer connected. Use System Print option.");
+            // window.print(); // Removed auto-print
             return;
         }
 
@@ -270,8 +270,8 @@ export default function DashboardPage() {
         } catch (error: any) {
             toast.dismiss(toastId);
             toast.error(error.message || "Failed to print. Check printer connection.");
-            // Fallback to browser print
-            window.print();
+            // Fallback to browser print removed to prevent glitching
+            // Users should use the manual "System Print" button if needed
         }
     };
 
@@ -753,15 +753,23 @@ export default function DashboardPage() {
                                 <p className="text-5xl font-black text-base-content">₹{lastBill.totalAmount.toFixed(2)}</p>
                             </div>
 
-                            <div className="grid grid-cols-2 gap-4">
-                                <button className="btn btn-outline gap-2" onClick={handlePrint}>
-                                    <Printer className="w-4 h-4" /> Receipt
-                                </button>
-                                <button className="btn btn-primary" onClick={() => {
-                                    setLastBill(null);
-                                    searchInputRef.current?.focus();
-                                }}>
-                                    New Bill
+                            <div className="flex flex-col gap-3">
+                                <div className="grid grid-cols-2 gap-4">
+                                    <button className="btn btn-outline gap-2" onClick={handlePrint}>
+                                        <Printer className="w-4 h-4" /> Thermal Print
+                                    </button>
+                                    <button className="btn btn-primary" onClick={() => {
+                                        setLastBill(null);
+                                        searchInputRef.current?.focus();
+                                    }}>
+                                        New Bill
+                                    </button>
+                                </div>
+                                <button
+                                    className="btn btn-ghost btn-sm text-xs opacity-50 hover:opacity-100 font-normal"
+                                    onClick={() => window.print()}
+                                >
+                                    System Print / PDF
                                 </button>
                             </div>
                         </div>
